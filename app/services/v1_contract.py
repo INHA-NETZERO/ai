@@ -11,6 +11,8 @@ import httpx
 import numpy as np
 
 from app.api_contracts import (
+    ChatbotRequest,
+    ChatbotResponse,
     DailyQuantilePrediction,
     GenerateRequest,
     GenerateResponse,
@@ -125,23 +127,9 @@ def predict_single_day_quantiles(request: V1ForecastRequest) -> V1ForecastRespon
 
 def generate_grounded_answer(
     request: GenerateRequest,
-    semantic_cache: ChatSemanticCache,
     llm_client: LocalLlamaClient | None,
 ) -> GenerateResponse:
     start = time.perf_counter()
-    grounding_text = _stable_grounding_text(request.grounding)
-    grounding_hash = hashlib.sha256(grounding_text.encode("utf-8")).hexdigest()
-    namespace = f"v1:generate:{request.locale}:{grounding_hash}"
-    cached = semantic_cache.get(namespace, request.question)
-    if cached is not None:
-        response, _score = cached
-        return GenerateResponse(
-            answer=str(response["answer"]),
-            cacheHit=True,
-            latencyMs=_elapsed_ms(start),
-            tokens=int(response.get("tokens", 0)),
-        )
-
     answer = _fallback_grounded_answer(request)
     if llm_client is not None:
         try:
@@ -159,8 +147,56 @@ def generate_grounded_answer(
             answer = _fallback_grounded_answer(request)
 
     tokens = _estimate_tokens(request.question, request.grounding, answer)
-    semantic_cache.set(namespace, request.question, {"answer": answer, "tokens": tokens})
     return GenerateResponse(answer=answer, cacheHit=False, latencyMs=_elapsed_ms(start), tokens=tokens)
+
+
+def generate_chatbot_answer(
+    request: ChatbotRequest,
+    semantic_cache: ChatSemanticCache,
+    llm_client: LocalLlamaClient | None,
+) -> ChatbotResponse:
+    start = time.perf_counter()
+    grounding_text = _stable_grounding_text(request.grounding)
+    grounding_hash = hashlib.sha256(grounding_text.encode("utf-8")).hexdigest()
+    namespace = f"v1:chat:{request.locale}:{grounding_hash}"
+    cached = semantic_cache.get(namespace, request.question)
+    if cached is not None:
+        response, _score = cached
+        return ChatbotResponse(
+            answer=str(response["answer"]),
+            sources=list(response.get("sources", [])),
+            cacheHit=True,
+            latencyMs=_elapsed_ms(start),
+            tokens=int(response.get("tokens", 0)),
+        )
+
+    sources = _grounding_sources(request.grounding)
+    answer = _fallback_grounded_answer(request)
+    if llm_client is not None:
+        try:
+            answer = llm_client.generate_text(
+                prompt=_chatbot_prompt(request),
+                system_prompt=(
+                    "You are a Korean ordering assistant chatbot. "
+                    "Use only the provided backend grounding and chat history. "
+                    "Do not invent, change, or recalculate numbers. "
+                    "Answer naturally in Korean."
+                ),
+                max_tokens=380,
+                temperature=0,
+            )
+        except Exception:
+            answer = _fallback_grounded_answer(request)
+
+    tokens = _estimate_tokens(request.question, request.grounding, answer)
+    semantic_cache.set(namespace, request.question, {"answer": answer, "sources": sources, "tokens": tokens})
+    return ChatbotResponse(
+        answer=answer,
+        sources=sources,
+        cacheHit=False,
+        latencyMs=_elapsed_ms(start),
+        tokens=tokens,
+    )
 
 
 def _baseline_quantile(ma7: float, trend: float, offset: int, weather: WeatherDay | None) -> QuantilePrediction:
@@ -389,7 +425,18 @@ def _generate_prompt(request: GenerateRequest) -> str:
     )
 
 
-def _fallback_grounded_answer(request: GenerateRequest) -> str:
+def _chatbot_prompt(request: ChatbotRequest) -> str:
+    history = "\n".join(f"{message.role}: {message.content}" for message in request.history[-6:])
+    return (
+        f"질문: {request.question}\n"
+        f"언어: {request.locale}\n"
+        f"이전 대화:\n{history or '없음'}\n"
+        f"백엔드 근거:\n{_stable_grounding_text(request.grounding)}\n"
+        "백엔드 근거에 있는 사실과 숫자만 사용해서 점주가 이해하기 쉽게 답하세요."
+    )
+
+
+def _fallback_grounded_answer(request: GenerateRequest | ChatbotRequest) -> str:
     grounding = request.grounding
     item = grounding.get("item", {})
     recommendation = grounding.get("recommendation", {})
@@ -411,6 +458,13 @@ def _fallback_grounded_answer(request: GenerateRequest) -> str:
     if potential is not None:
         parts.append(f"제공된 잠재 탄소 절감량은 {potential}kgCO2e입니다.")
     return " ".join(parts)
+
+
+def _grounding_sources(grounding: dict[str, Any]) -> list[str]:
+    sources = grounding.get("sources")
+    if isinstance(sources, list) and all(isinstance(source, str) for source in sources):
+        return sources
+    return ["backend_grounding"]
 
 
 def _stable_grounding_text(grounding: dict[str, Any]) -> str:

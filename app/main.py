@@ -8,6 +8,8 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ValidationError
 
 from app.api_contracts import (
+    ChatbotRequest,
+    ChatbotResponse,
     GenerateRequest,
     GenerateResponse,
     V1ForecastRequest,
@@ -22,7 +24,6 @@ from app.schemas import (
     CacheStatusResponse,
     ChatRequest,
     ChatResponse,
-    DailyCloseResponse,
     ForecastResponse,
     IntegrationStatusResponse,
     OrderRecommendationResponse,
@@ -37,6 +38,7 @@ from app.services.integration_status import build_integration_status
 from app.services.v1_contract import (
     LLM_MODEL_VERSION,
     MODEL_VERSION,
+    generate_chatbot_answer,
     generate_grounded_answer,
     predict_order_quantiles,
     predict_single_day_quantiles,
@@ -171,7 +173,24 @@ def v1_forecast(payload: dict[str, Any] = Body(...)) -> V1ForecastResponse:
 def v1_generate(payload: dict[str, Any] = Body(...)) -> GenerateResponse:
     request = _validate_body(GenerateRequest, payload)
     state: AppState = app.state.runtime
-    response = generate_grounded_answer(
+    exact_key = cache_key("v1/generate", request.model_dump(by_alias=True))
+    cached = state.exact_cache.get(exact_key)
+    if cached is not None:
+        state.cache_metrics.exact_hits += 1
+        cached["cacheHit"] = True
+        return GenerateResponse.model_validate(cached)
+
+    state.cache_metrics.exact_misses += 1
+    response = generate_grounded_answer(request, llm_client=state.llm_client)
+    state.exact_cache.set(exact_key, response.model_dump(by_alias=True))
+    return response
+
+
+@app.post("/v1/chat", response_model=ChatbotResponse)
+def v1_chat(payload: dict[str, Any] = Body(...)) -> ChatbotResponse:
+    request = _validate_body(ChatbotRequest, payload)
+    state: AppState = app.state.runtime
+    response = generate_chatbot_answer(
         request,
         semantic_cache=_chat_semantic_cache(state),
         llm_client=state.llm_client,
@@ -211,28 +230,6 @@ def order_recommendation() -> OrderRecommendationResponse:
         OrderRecommendationResponse,
         lambda: recommend_orders(request),
     )
-
-
-@app.post("/daily-close", response_model=DailyCloseResponse)
-def daily_close() -> DailyCloseResponse:
-    state: AppState = app.state.runtime
-    data = load_closing_data(state.settings)
-    payload = closing_cache_payload(data) | {"output": "llm_summary"}
-
-    def factory() -> DailyCloseResponse:
-        forecast_response = forecast_demand_from_closing_data(data)
-        order_response = recommend_orders(build_order_request(data, forecast_response.forecasts))
-        llm_output = _build_llm_output(data, forecast_response, order_response)
-        return DailyCloseResponse(
-            store_id=data["store_id"],
-            business_date=data["business_date"],
-            data_version=data["data_version"],
-            forecast=forecast_response,
-            order_recommendation=order_response,
-            llm_output=llm_output,
-        )
-
-    return _cached_response("daily-close", payload, DailyCloseResponse, factory)
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -286,29 +283,6 @@ def _chat_semantic_cache(state: AppState) -> ChatSemanticCache:
     return state.chat_semantic_cache
 
 
-def _build_llm_output(
-    data: dict[str, Any],
-    forecast_response: ForecastResponse,
-    order_response: OrderRecommendationResponse,
-) -> str:
-    prompt = _summary_prompt(data, forecast_response, order_response)
-    state: AppState = app.state.runtime
-    if state.llm_client is None:
-        return _fallback_summary(data, order_response)
-    try:
-        return state.llm_client.generate_text(
-            prompt=prompt,
-            system_prompt=(
-                "You explain POS closing order recommendations in Korean. "
-                "Do not change quantities. Keep the answer short and practical."
-            ),
-            max_tokens=500,
-            temperature=0,
-        )
-    except Exception:
-        return _fallback_summary(data, order_response)
-
-
 def _build_chat_answer(
     data: dict[str, Any],
     forecast_response: ForecastResponse,
@@ -339,20 +313,6 @@ def _build_chat_answer(
         ), sources
     except Exception:
         return _fallback_summary(data, order_response), sources
-
-
-def _summary_prompt(
-    data: dict[str, Any],
-    forecast_response: ForecastResponse,
-    order_response: OrderRecommendationResponse,
-) -> str:
-    return (
-        f"매장: {data['store_id']}\n"
-        f"마감일: {data['business_date']}\n"
-        f"예측 결과: {forecast_response.model_dump_json(ensure_ascii=False)}\n"
-        f"발주 추천: {order_response.model_dump_json(ensure_ascii=False)}\n"
-        "점주 화면에 띄울 오늘 마감 발주 추천 요약을 한국어로 작성해줘."
-    )
 
 
 def _fallback_summary(data: dict[str, Any], order_response: OrderRecommendationResponse) -> str:

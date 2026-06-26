@@ -56,16 +56,6 @@ class OrderRecommendationResponse(BaseModel):
     cache: CacheInfo = Field(default_factory=CacheInfo)
 
 
-class DailyCloseResponse(BaseModel):
-    store_id: str
-    business_date: str
-    data_version: str
-    forecast: ForecastResponse
-    order_recommendation: OrderRecommendationResponse
-    llm_output: str
-    cache: CacheInfo = Field(default_factory=CacheInfo)
-
-
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1)
 

@@ -246,6 +246,31 @@ def test_v1_generate_returns_required_metrics_and_cache_hit() -> None:
     assert second.json()["tokens"] >= 1
 
 
+def test_v1_chat_returns_grounded_answer_and_semantic_cache_hit() -> None:
+    question = f"우유 발주 추천 근거를 설명해줘 {uuid4()}"
+    payload = {
+        "question": question,
+        "locale": "ko",
+        "grounding": {
+            "item": {"itemId": 101, "itemName": "우유", "unit": "L"},
+            "forecast": {"p10": 60, "p50": 80, "p90": 108},
+            "recommendation": {"recommendedQuantity": 66},
+            "sources": ["backend:closing-result"],
+        },
+        "history": [{"role": "user", "content": "오늘 마감 결과 알려줘"}],
+    }
+    with TestClient(app) as client:
+        first = client.post("/v1/chat", json=payload)
+        second = client.post("/v1/chat", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["cacheHit"] is False
+    assert second.json()["cacheHit"] is True
+    assert second.json()["sources"] == ["backend:closing-result"]
+    assert second.json()["tokens"] >= 1
+
+
 def test_v1_validation_errors_use_contract_shape() -> None:
     payload = {
         "storeId": 1,
@@ -284,19 +309,14 @@ def test_order_recommendation() -> None:
     assert {item["sku"] for item in body["recommendations"]} >= {"치킨 토마토 치즈 샌드위치", "우유"}
 
 
-def test_daily_close_returns_llm_output_without_payload() -> None:
+def test_daily_close_is_not_served_by_ai_server() -> None:
     with TestClient(app) as client:
         response = client.post("/daily-close")
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["store_id"] == "inha-store-001"
-    assert body["llm_output"]
-    assert body["business_date"] == "2025-12-31"
-    assert len(body["order_recommendation"]["recommendations"]) == 9
+    assert response.status_code == 404
 
 
-def test_chat_is_the_only_semantic_cache_user() -> None:
+def test_legacy_chat_uses_semantic_cache_for_local_demo() -> None:
     payload = {"question": "샌드위치 발주가 왜 필요한지 알려줘"}
     with TestClient(app) as client:
         first = client.post("/chat", json=payload)
