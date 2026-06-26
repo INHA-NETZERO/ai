@@ -2,6 +2,7 @@
 __pycache__/
 *.py[codz]
 *$py.class
+.DS_Store
 
 # C extensions
 *.so
@@ -160,6 +161,9 @@ venv.bak/
 # Local trained model artifacts
 app/models/*.txt
 app/models/*.json
+
+# Local/generated training CSV files
+app/data/training/*.csv
 
 # Spyder project settings
 .spyderproject

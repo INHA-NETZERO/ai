@@ -1,18 +1,15 @@
 import csv
 import glob
 import json
-import re
-from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
-from statistics import mean, pstdev
+from statistics import mean
 from typing import Any
 
 import numpy as np
 
 from app.schemas import ForecastPoint, ForecastResponse
 from app.services.demo_data import (
-    ORDER_POLICY_PATH,
     VALID_ITEM_ID_PATTERN,
     _read_csv,
     _to_float,
@@ -23,23 +20,20 @@ MODEL_DIR = Path(__file__).resolve().parents[1] / "models"
 DEFAULT_MODEL_PATH = MODEL_DIR / "demand_lgbm.txt"
 DEFAULT_METADATA_PATH = MODEL_DIR / "demand_lgbm_metadata.json"
 FEATURE_NAMES = [
+    "day_index",
+    "month",
+    "day_of_month",
+    "weekday_code",
+    "is_weekend",
+    "weather_code",
+    "temperature",
+    "rain_mm",
+    "event_flag",
+    "holiday_flag",
+    "new_menu_flag",
     "item_code",
     "type_code",
-    "unit_code",
-    "weekday",
-    "day_index",
-    "begin_inventory",
-    "order_quantity",
-    "sales",
-    "stockout",
-    "waste",
-    "ending_inventory",
-    "lag_1",
-    "lag_2",
-    "lag_3",
-    "rolling_3",
-    "rolling_5",
-    "std_5",
+    "scenario_code",
     "shelf_life_days",
     "lead_time_days",
     "review_period_days",
@@ -53,10 +47,24 @@ SAFETY_Z = {
     "중": 1.0,
     "높임": 1.65,
 }
+TRAINING_COLUMNS = [
+    "날짜",
+    "요일",
+    "날씨",
+    "기온",
+    "강수mm",
+    "행사",
+    "공휴일",
+    "신메뉴",
+    "품목",
+    "구분",
+    "판매수량",
+    "비고_시나리오",
+]
 
 
 def train_lightgbm_model(
-    inventory_paths: list[Path],
+    training_paths: list[Path],
     item_master_path: Path,
     order_policy_path: Path,
     model_path: Path = DEFAULT_MODEL_PATH,
@@ -68,7 +76,8 @@ def train_lightgbm_model(
         if VALID_ITEM_ID_PATTERN.match(row.get("품목ID", ""))
     ]
     metadata = _build_metadata(item_master, order_policy)
-    features, targets = _build_training_matrix_from_paths(inventory_paths, metadata)
+    metadata = _augment_metadata_from_training_paths(training_paths, metadata)
+    features, targets = _build_training_matrix_from_paths(training_paths, metadata)
     if len(targets) < 10:
         raise ValueError("Need at least 10 training examples to train the saved demand model")
 
@@ -99,7 +108,8 @@ def train_lightgbm_model(
     metadata["train_examples"] = int(len(train_targets))
     metadata["validation_examples"] = int(len(valid_targets))
     metadata["evaluation"] = evaluation
-    metadata["inventory_files"] = [str(path) for path in inventory_paths]
+    metadata["training_columns"] = TRAINING_COLUMNS
+    metadata["training_files"] = [str(path) for path in training_paths]
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "model_path": str(model_path),
@@ -121,10 +131,11 @@ def forecast_with_saved_model(
     import lightgbm as lgb
 
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("feature_names") != FEATURE_NAMES:
+        return None
     model = lgb.Booster(model_file=str(model_path))
     policy_by_name = metadata["policy_by_name"]
     latest_by_item = _latest_rows_by_item(data["inventory_flow"])
-    history_by_item = _history_by_item(data["inventory_flow"])
     horizon = max(
         int(float(policy_by_name[item]["horizon_days"]))
         for item in latest_by_item
@@ -135,13 +146,11 @@ def forecast_with_saved_model(
     for item, latest in latest_by_item.items():
         if item not in policy_by_name:
             continue
-        history = sorted(history_by_item[item], key=lambda row: row["날짜"])
-        rolling_demands = [_to_float(row["수요"]) for row in history]
         current = dict(latest)
         start = date.fromisoformat(latest["날짜"]) + timedelta(days=1)
 
         for offset in range(horizon):
-            feature = _row_features(current, rolling_demands, metadata)
+            feature = _inference_features(current, start + timedelta(days=offset), metadata)
             prediction = max(0.0, float(model.predict(np.array([feature]))[0]))
             forecasts.append(
                 ForecastPoint(
@@ -150,7 +159,6 @@ def forecast_with_saved_model(
                     quantity=round(prediction, 3),
                 )
             )
-            rolling_demands.append(prediction)
             current = _synthetic_next_row(current, prediction, start + timedelta(days=offset))
 
     return ForecastResponse(forecasts=forecasts, method="lightgbm_saved_model")
@@ -171,7 +179,9 @@ def _load_inventory_rows(paths: list[Path]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for path in paths:
         with path.open(encoding="utf-8-sig", newline="") as csv_file:
-            for row in csv.DictReader(csv_file):
+            reader = csv.DictReader(csv_file)
+            _validate_training_columns(path, reader.fieldnames)
+            for row in reader:
                 row["_source_file"] = path.name
                 rows.append(row)
     return rows
@@ -188,6 +198,43 @@ def _build_training_matrix_from_paths(paths: list[Path], metadata: dict[str, Any
     if not target_chunks:
         return np.empty((0, len(FEATURE_NAMES))), np.empty((0,))
     return np.vstack(feature_chunks), np.concatenate(target_chunks)
+
+
+def _augment_metadata_from_training_paths(paths: list[Path], metadata: dict[str, Any]) -> dict[str, Any]:
+    weekdays = set()
+    weather_values = set()
+    scenario_values = set()
+    item_values = set(metadata["item_codes"])
+    type_values = set(metadata["type_codes"])
+    temperatures = []
+    rain_values = []
+
+    for path in paths:
+        for row in _load_inventory_rows([path]):
+            weekdays.add(row["요일"])
+            weather_values.add(row["날씨"])
+            scenario_values.add(row["비고_시나리오"])
+            item_values.add(row["품목"])
+            type_values.add(row["구분"])
+            temperatures.append(_to_float(row["기온"]))
+            rain_values.append(_to_float(row["강수mm"]))
+
+    metadata["weekday_codes"] = _category_codes(weekdays)
+    metadata["weather_codes"] = _category_codes(weather_values)
+    metadata["scenario_codes"] = _category_codes(scenario_values)
+    metadata["item_codes"] = _category_codes(item_values)
+    metadata["type_codes"] = _category_codes(type_values)
+    metadata["defaults"] = {
+        "요일": "월",
+        "날씨": _mode(weather_values, "맑음"),
+        "기온": round(float(mean(temperatures)), 3) if temperatures else 20.0,
+        "강수mm": round(float(mean(rain_values)), 3) if rain_values else 0.0,
+        "행사": "N",
+        "공휴일": "N",
+        "신메뉴": "N",
+        "비고_시나리오": _mode(scenario_values, "normal"),
+    }
+    return metadata
 
 
 def _build_metadata(item_master: list[dict[str, str]], order_policy: list[dict[str, str]]) -> dict[str, Any]:
@@ -222,16 +269,9 @@ def _build_metadata(item_master: list[dict[str, str]], order_policy: list[dict[s
 def _build_training_matrix(rows: list[dict[str, str]], metadata: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
     features = []
     targets = []
-    for group_rows in _group_training_rows(rows).values():
-        ordered = sorted(group_rows, key=lambda row: row["날짜"])
-        demands: list[float] = []
-        for idx, row in enumerate(ordered[:-1]):
-            demands.append(_to_float(row["수요"]))
-            if idx < 2:
-                continue
-            next_demand = _to_float(ordered[idx + 1]["수요"])
-            features.append(_row_features(row, demands, metadata))
-            targets.append(next_demand)
+    for row in rows:
+        features.append(_training_row_features(row, metadata))
+        targets.append(_to_float(row["판매수량"]))
     return np.array(features, dtype=np.float64), np.array(targets, dtype=np.float64)
 
 
@@ -268,36 +308,26 @@ def _evaluate_model(model: Any, features: np.ndarray, targets: np.ndarray) -> di
     }
 
 
-def _group_training_rows(rows: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
-    grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
-    for row in rows:
-        grouped[f"{row.get('_source_file', 'default')}::{row['품목']}"].append(row)
-    return grouped
-
-
-def _row_features(row: dict[str, Any], demands: list[float], metadata: dict[str, Any]) -> list[float]:
+def _training_row_features(row: dict[str, Any], metadata: dict[str, Any]) -> list[float]:
     item = row["품목"]
     item_info = metadata["item_by_name"].get(item, {})
     policy = metadata["policy_by_name"].get(item, {})
     day = date.fromisoformat(row["날짜"])
     return [
-        _code(metadata["item_codes"], item),
-        _code(metadata["type_codes"], item_info.get("type") or row.get("구분", "")),
-        _code(metadata["unit_codes"], item_info.get("unit") or row.get("단위", "")),
-        float(day.weekday()),
         float(day.toordinal()),
-        _to_float(row.get("기초재고", 0)),
-        _to_float(row.get("발주(감)", 0)),
-        _to_float(row.get("실판매", row.get("수요", 0))),
-        _to_float(row.get("결품", 0)),
-        _to_float(row.get("폐기", 0)),
-        _to_float(row.get("기말재고", 0)),
-        _lag(demands, 1),
-        _lag(demands, 2),
-        _lag(demands, 3),
-        _rolling_mean(demands, 3),
-        _rolling_mean(demands, 5),
-        _rolling_std(demands, 5),
+        float(day.month),
+        float(day.day),
+        _code(metadata["weekday_codes"], row["요일"]),
+        1.0 if day.weekday() >= 5 else 0.0,
+        _code(metadata["weather_codes"], row["날씨"]),
+        _to_float(row["기온"]),
+        _to_float(row["강수mm"]),
+        _binary_flag(row["행사"]),
+        _binary_flag(row["공휴일"]),
+        _binary_flag(row["신메뉴"]),
+        _code(metadata["item_codes"], item),
+        _code(metadata["type_codes"], item_info.get("type") or row["구분"]),
+        _code(metadata["scenario_codes"], row["비고_시나리오"]),
         _to_float(item_info.get("shelf_life_days", 0)),
         _to_float(policy.get("lead_time_days", 1)),
         _to_float(policy.get("review_period_days", 1)),
@@ -307,16 +337,27 @@ def _row_features(row: dict[str, Any], demands: list[float], metadata: dict[str,
     ]
 
 
+def _inference_features(row: dict[str, Any], target_date: date, metadata: dict[str, Any]) -> list[float]:
+    defaults = metadata.get("defaults", {})
+    training_like_row = {
+        "날짜": target_date.isoformat(),
+        "요일": _korean_weekday(target_date),
+        "날씨": row.get("날씨", defaults.get("날씨", "맑음")),
+        "기온": row.get("기온", defaults.get("기온", 20.0)),
+        "강수mm": row.get("강수mm", defaults.get("강수mm", 0.0)),
+        "행사": row.get("행사", defaults.get("행사", "N")),
+        "공휴일": row.get("공휴일", defaults.get("공휴일", "N")),
+        "신메뉴": row.get("신메뉴", defaults.get("신메뉴", "N")),
+        "품목": row["품목"],
+        "구분": row["구분"],
+        "비고_시나리오": row.get("비고_시나리오", defaults.get("비고_시나리오", "normal")),
+    }
+    return _training_row_features(training_like_row, metadata)
+
+
 def _latest_rows_by_item(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
     latest_date = max(row["날짜"] for row in rows)
     return {row["품목"]: row for row in rows if row["날짜"] == latest_date}
-
-
-def _history_by_item(rows: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
-    history: dict[str, list[dict[str, str]]] = defaultdict(list)
-    for row in rows:
-        history[row["품목"]].append(row)
-    return history
 
 
 def _synthetic_next_row(row: dict[str, Any], prediction: float, next_date: date) -> dict[str, Any]:
@@ -327,6 +368,14 @@ def _synthetic_next_row(row: dict[str, Any], prediction: float, next_date: date)
     next_row["결품"] = "0"
     next_row["폐기"] = "0"
     return next_row
+
+
+def _validate_training_columns(path: Path, fieldnames: list[str] | None) -> None:
+    if fieldnames != TRAINING_COLUMNS:
+        raise ValueError(
+            f"{path} must use training columns in this exact order: "
+            + ",".join(TRAINING_COLUMNS)
+        )
 
 
 def _category_codes(values: Any) -> dict[str, int]:
@@ -348,16 +397,13 @@ def _code(mapping: dict[str, int], value: str) -> float:
     return float(mapping.get(value, -1))
 
 
-def _lag(values: list[float], days: int) -> float:
-    return values[-days] if len(values) >= days else 0.0
+def _binary_flag(value: str | int | float | bool) -> float:
+    return 1.0 if str(value).strip().upper() in {"Y", "1", "TRUE", "T"} else 0.0
 
 
-def _rolling_mean(values: list[float], window: int) -> float:
-    if not values:
-        return 0.0
-    return float(mean(values[-window:]))
+def _korean_weekday(day: date) -> str:
+    return ["월", "화", "수", "목", "금", "토", "일"][day.weekday()]
 
 
-def _rolling_std(values: list[float], window: int) -> float:
-    sample = values[-window:]
-    return float(pstdev(sample)) if len(sample) > 1 else 0.0
+def _mode(values: set[str], default: str) -> str:
+    return sorted(values)[0] if values else default

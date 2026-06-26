@@ -88,19 +88,40 @@ http://127.0.0.1:8000/docs
 
 ## 로컬 LightGBM 모델 학습
 
-생성한 inventory-flow CSV 파일들을 아래 폴더에 넣습니다.
+생성한 판매 학습 CSV 파일들을 아래 폴더에 넣습니다.
 
 ```text
 app/data/training/
 ```
 
+학습 CSV 컬럼은 아래 순서와 이름을 정확히 맞춰야 합니다.
+
+```text
+날짜,요일,날씨,기온,강수mm,행사,공휴일,신메뉴,품목,구분,판매수량,비고_시나리오
+```
+
+각 컬럼의 역할:
+
+- `날짜`: 판매일, `YYYY-MM-DD`
+- `요일`: 월/화/수/목/금/토/일
+- `날씨`: 맑음, 흐림, 비 등
+- `기온`: 숫자형 기온
+- `강수mm`: 숫자형 강수량
+- `행사`: 행사 여부, `Y`/`N`
+- `공휴일`: 공휴일 여부, `Y`/`N`
+- `신메뉴`: 신메뉴 여부, `Y`/`N`
+- `품목`: 품목명
+- `구분`: 완제품/원재료 등 품목 구분
+- `판매수량`: LightGBM 학습 target
+- `비고_시나리오`: 더미 생성 시나리오 설명
+
 그다음 학습 스크립트를 실행합니다.
 
 ```bash
-.venv/bin/python scripts/train_lightgbm.py --inventory "app/data/training/*.csv"
+.venv/bin/python scripts/train_lightgbm.py --training "app/data/training/sales_*.csv"
 ```
 
-`app/data/training/`이 비어 있으면 작은 smoke test용으로 `app/data/inventory_flow_5days.csv`를 사용합니다.
+`--inventory` 옵션명도 이전 호환을 위해 남겨두었지만, 실제로는 위 판매 학습 CSV 스키마를 읽습니다. 재고흐름 CSV처럼 다른 헤더를 가진 파일을 넣으면 학습 전에 컬럼 검증에서 실패합니다.
 
 학습 결과물:
 

@@ -18,10 +18,11 @@ from app.services.demo_data import ITEM_MASTER_PATH, ORDER_POLICY_PATH
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train and save the POS demand LightGBM model.")
     parser.add_argument(
+        "--training",
         "--inventory",
         nargs="+",
-        default=["app/data/training/*.csv", "app/data/inventory_flow_5days.csv"],
-        help="Inventory flow CSV path(s) or glob(s).",
+        default=["app/data/training/sales_*.csv"],
+        help="Sales training CSV path(s) or glob(s). Required columns: 날짜,요일,날씨,기온,강수mm,행사,공휴일,신메뉴,품목,구분,판매수량,비고_시나리오.",
     )
     parser.add_argument("--item-master", default=str(ITEM_MASTER_PATH))
     parser.add_argument("--order-policy", default=str(ORDER_POLICY_PATH))
@@ -29,12 +30,12 @@ def main() -> None:
     parser.add_argument("--metadata-out", default=str(DEFAULT_METADATA_PATH))
     args = parser.parse_args()
 
-    inventory_paths = inventory_paths_from_glob(args.inventory)
-    if not inventory_paths:
-        raise SystemExit("No inventory CSV files found.")
+    training_paths = inventory_paths_from_glob(args.training)
+    if not training_paths:
+        raise SystemExit("No sales training CSV files found. Put files under app/data/training/ or pass --training.")
 
     result = train_lightgbm_model(
-        inventory_paths=inventory_paths,
+        training_paths=training_paths,
         item_master_path=Path(args.item_master),
         order_policy_path=Path(args.order_policy),
         model_path=Path(args.model_out),
