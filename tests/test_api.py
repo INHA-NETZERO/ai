@@ -275,6 +275,48 @@ def test_v1_chat_returns_followup_answer_and_cache_hit() -> None:
     assert second.json()["tokens"] >= 1
 
 
+def test_v1_generate_injects_rag_context_into_llm_prompt() -> None:
+    from app.api_contracts import GenerateRequest
+    from app.services.rag import LocalRagRetriever
+    from app.services.semantic_cache import ChatSemanticCache
+    from app.services.v1_contract import generate_grounded_answer
+
+    class FakeLlm:
+        def __init__(self) -> None:
+            self.prompt = ""
+
+        def generate_text(self, prompt, **_kwargs):
+            self.prompt = prompt
+            return "우유는 66L 발주를 권장합니다. RAG 근거와 수요 예측값을 바탕으로 과발주를 줄이는 수량입니다."
+
+    request = GenerateRequest.model_validate(
+        {
+            "question": f"우유 LightGBM 발주 탄소 절감 이유를 알려줘 {uuid4()}",
+            "locale": "ko",
+            "grounding": {
+                "item": {"itemId": 101, "itemName": "우유", "unit": "L"},
+                "forecast": {"p10": 60, "p50": 80, "p90": 108},
+                "recommendation": {"recommendedQuantity": 66},
+                "carbon": {"potentialSavingKg": 39.4},
+            },
+        }
+    )
+    fake_llm = FakeLlm()
+    cache = ChatSemanticCache(Settings(_env_file=None, vector_db_path=f".cache/test-rag-{uuid4()}.sqlite3"))
+
+    response = generate_grounded_answer(
+        request,
+        semantic_cache=cache,
+        llm_client=fake_llm,
+        rag_retriever=LocalRagRetriever(),
+    )
+
+    assert response.cache_hit is False
+    assert "RAG 근거 문서" in fake_llm.prompt
+    assert "order_recommendation.md" in fake_llm.prompt
+    assert "LightGBM" in fake_llm.prompt
+
+
 def test_v1_validation_errors_use_contract_shape() -> None:
     payload = {
         "storeId": 1,

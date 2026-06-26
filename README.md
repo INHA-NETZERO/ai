@@ -548,7 +548,7 @@ Spring 백엔드가 붙는 API는 아래 네 개입니다. 기존 `/forecast`, `
 
 #### `POST /v1/generate`
 
-백엔드가 만든 grounding 숫자를 2~3문장 한국어 설명으로 바꿉니다. `cacheHit`, `latencyMs`, `tokens`는 항상 포함됩니다. 유사 질문은 semantic cache로 재사용합니다. 로컬 Llama 연결에 실패하면 fallback 문장을 반환합니다.
+백엔드가 만든 grounding 숫자를 2~3문장 한국어 설명으로 바꿉니다. 내부적으로 `app/data/knowledge/*.md`의 RAG 근거 문서를 검색해 발주 정책, 수요예측 의미, 탄소 절감 설명 방식을 함께 넣습니다. `cacheHit`, `latencyMs`, `tokens`는 항상 포함됩니다. 유사 질문은 semantic cache로 재사용합니다. 로컬 Llama 연결에 실패하면 fallback 문장을 반환합니다.
 
 요청 예시:
 
@@ -578,7 +578,7 @@ Spring 백엔드가 붙는 API는 아래 네 개입니다. 기존 `/forecast`, `
 
 #### `POST /v1/chat`
 
-`/v1/generate`로 짧은 코멘트를 보여준 뒤, 사용자가 추가 질문을 입력하면 같은 grounding과 대화 history를 받아 더 자세히 설명합니다. 수치는 grounding에 있는 값만 인용하고 새로 계산하지 않습니다.
+`/v1/generate`로 짧은 코멘트를 보여준 뒤, 사용자가 추가 질문을 입력하면 같은 grounding과 대화 history를 받아 더 자세히 설명합니다. 이때도 RAG 근거 문서를 검색해 발주 규칙과 용어 설명을 보강합니다. 수치는 grounding에 있는 값만 인용하고 새로 계산하지 않습니다.
 
 요청 예시:
 

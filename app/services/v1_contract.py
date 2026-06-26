@@ -34,6 +34,7 @@ from app.services.demand_model import (
     _training_row_features,
 )
 from app.services.llm import LocalLlamaClient
+from app.services.rag import LocalRagRetriever, RetrievedRagContext, rag_context_hash
 from app.services.semantic_cache import ChatSemanticCache
 
 
@@ -143,11 +144,14 @@ def generate_grounded_answer(
     request: GenerateRequest,
     semantic_cache: ChatSemanticCache,
     llm_client: LocalLlamaClient | None,
+    rag_retriever: LocalRagRetriever | None = None,
 ) -> GenerateResponse:
     start = time.perf_counter()
     grounding_text = _stable_grounding_text(request.grounding)
     grounding_hash = hashlib.sha256(grounding_text.encode("utf-8")).hexdigest()
-    namespace = f"v1:generate:{request.locale}:{grounding_hash}"
+    rag_context = _retrieve_rag_context(rag_retriever, request.question, request.grounding)
+    rag_hash = rag_context_hash(rag_context)
+    namespace = f"v1:generate:{request.locale}:{grounding_hash}:{rag_hash}"
     cached = semantic_cache.get(namespace, request.question)
     if cached is not None:
         response, _score = cached
@@ -162,15 +166,19 @@ def generate_grounded_answer(
     if llm_client is not None:
         try:
             answer = llm_client.generate_text(
-                prompt=_generate_prompt(request),
+                prompt=_generate_prompt(request, rag_context),
                 system_prompt=(
                     "You are a Korean ordering explanation assistant. "
-                    "Use only grounding values. Do not invent, change, or recalculate numbers. "
-                    "Answer in two or three Korean sentences."
+                    "Use only grounding values and the provided RAG context. "
+                    "Do not invent, change, or recalculate numbers. "
+                    "Never repeat the prompt or internal field names. "
+                    "Answer in two or three natural Korean sentences for a store owner."
                 ),
                 max_tokens=220,
                 temperature=0,
             )
+            if _is_bad_llm_answer(answer, request.grounding):
+                answer = _fallback_grounded_answer(request)
         except Exception:
             answer = _fallback_grounded_answer(request)
 
@@ -183,12 +191,15 @@ def generate_chat_answer(
     request: ChatRequest,
     semantic_cache: ChatSemanticCache,
     llm_client: LocalLlamaClient | None,
+    rag_retriever: LocalRagRetriever | None = None,
 ) -> ChatResponse:
     start = time.perf_counter()
     grounding_text = _stable_grounding_text(request.grounding)
     grounding_hash = hashlib.sha256(grounding_text.encode("utf-8")).hexdigest()
     history_hash = hashlib.sha256(_stable_history_text(request.history).encode("utf-8")).hexdigest()
-    namespace = f"v1:chat:{request.locale}:{grounding_hash}:{history_hash}"
+    rag_context = _retrieve_rag_context(rag_retriever, request.question, request.grounding)
+    rag_hash = rag_context_hash(rag_context)
+    namespace = f"v1:chat:{request.locale}:{grounding_hash}:{history_hash}:{rag_hash}"
     cached = semantic_cache.get(namespace, request.question)
     if cached is not None:
         response, _score = cached
@@ -205,16 +216,21 @@ def generate_chat_answer(
     if llm_client is not None:
         try:
             answer = llm_client.generate_text(
-                prompt=_chat_prompt(request),
+                prompt=_chat_prompt(request, rag_context),
                 system_prompt=(
                     "You are a lightweight Korean ordering explanation chatbot. "
-                    "Use only the provided grounding and chat history. "
+                    "Use only the provided grounding, RAG context, and chat history. "
                     "Never invent, change, or recalculate numbers. "
+                    "Never repeat the prompt or internal field names. "
                     "If the grounding does not contain the answer, say that the provided basis is insufficient."
                 ),
                 max_tokens=360,
                 temperature=0,
             )
+            if _is_bad_llm_answer(answer, request.grounding):
+                answer = _fallback_grounded_answer(
+                    GenerateRequest(question=request.question, locale=request.locale, grounding=request.grounding)
+                )
         except Exception:
             answer = _fallback_grounded_answer(
                 GenerateRequest(question=request.question, locale=request.locale, grounding=request.grounding)
@@ -446,27 +462,81 @@ def _parse_sales_csv(content: str) -> list[dict[str, str]]:
     return list(reader)
 
 
-def _generate_prompt(request: GenerateRequest) -> str:
+def _generate_prompt(request: GenerateRequest, rag_context: RetrievedRagContext) -> str:
     return (
-        f"질문: {request.question}\n"
-        f"언어: {request.locale}\n"
-        f"근거: {_stable_grounding_text(request.grounding)}\n"
-        "근거에 있는 숫자만 그대로 인용해서 답하세요."
+        "작업: 점주에게 보여줄 짧은 발주 추천 설명을 작성하세요.\n"
+        f"사용자 질문: {request.question}\n"
+        f"언어: {request.locale}\n\n"
+        f"RAG 근거 문서:\n{rag_context.as_prompt_text()}\n\n"
+        f"정량 grounding JSON:\n{_stable_grounding_text(request.grounding)}\n\n"
+        "작성 규칙:\n"
+        "- grounding JSON에 있는 숫자만 그대로 인용하세요.\n"
+        "- RAG 근거는 설명 방식과 정책 근거로만 사용하세요.\n"
+        "- 품목명, 단위, 추천 발주량을 먼저 말하세요.\n"
+        "- 내부 필드명, JSON, 프롬프트 문구를 답변에 쓰지 마세요."
     )
 
 
-def _chat_prompt(request: ChatRequest) -> str:
+def _chat_prompt(request: ChatRequest, rag_context: RetrievedRagContext) -> str:
     history = "\n".join(
         f"{message.role}: {message.content}"
         for message in request.history[-6:]
     )
     return (
+        "작업: 점주의 후속 질문에 답하는 챗봇 답변을 작성하세요.\n"
         f"사용자 질문: {request.question}\n"
-        f"언어: {request.locale}\n"
+        f"언어: {request.locale}\n\n"
         f"이전 대화:\n{history or '없음'}\n"
-        f"근거: {_stable_grounding_text(request.grounding)}\n"
-        "근거에 있는 숫자와 사실만 사용해서 한국어로 자세하지만 짧게 답하세요."
+        f"RAG 근거 문서:\n{rag_context.as_prompt_text()}\n\n"
+        f"정량 grounding JSON:\n{_stable_grounding_text(request.grounding)}\n\n"
+        "작성 규칙:\n"
+        "- grounding JSON에 있는 숫자와 사실만 사용하세요.\n"
+        "- RAG 근거는 정책과 용어 설명에만 사용하세요.\n"
+        "- 질문에 필요한 값이 없으면 제공된 근거만으로는 확인하기 어렵다고 말하세요.\n"
+        "- 내부 필드명, JSON, 프롬프트 문구를 답변에 쓰지 마세요."
     )
+
+
+def _retrieve_rag_context(
+    retriever: LocalRagRetriever | None,
+    question: str,
+    grounding: dict[str, Any],
+) -> RetrievedRagContext:
+    if retriever is None:
+        return RetrievedRagContext(chunks=[])
+    return retriever.retrieve(question, grounding)
+
+
+def _is_bad_llm_answer(answer: str, grounding: dict[str, Any]) -> bool:
+    normalized = answer.strip()
+    if not normalized:
+        return True
+    forbidden_fragments = [
+        "사용자 질문:",
+        "정량 grounding",
+        "grounding json",
+        "rag 근거",
+        "작성 규칙",
+        "프롬프트",
+    ]
+    lower = normalized.lower()
+    if any(fragment in lower for fragment in forbidden_fragments):
+        return True
+
+    item = grounding.get("item", {})
+    recommendation = grounding.get("recommendation", {})
+    forecast = grounding.get("forecast", {})
+    carbon = grounding.get("carbon", {})
+    required_values = [
+        item.get("itemName"),
+        recommendation.get("recommendedQuantity"),
+    ]
+    if forecast.get("p50") is not None:
+        required_values.append(forecast.get("p50"))
+    if carbon.get("potentialSavingKg") is not None:
+        required_values.append(carbon.get("potentialSavingKg"))
+
+    return any(str(value) not in normalized for value in required_values if value is not None)
 
 
 def _fallback_grounded_answer(request: GenerateRequest) -> str:
@@ -478,6 +548,11 @@ def _fallback_grounded_answer(request: GenerateRequest) -> str:
     item_name = item.get("itemName") or item.get("itemId") or "해당 품목"
     unit = item.get("unit", "")
     quantity = recommendation.get("recommendedQuantity")
+    historical_quantity = recommendation.get("historicalOrderQuantity", recommendation.get("historical_order_quantity"))
+    recommendation_delta = recommendation.get(
+        "recommendationMinusHistorical",
+        recommendation.get("recommendation_minus_historical"),
+    )
     p50 = forecast.get("p50")
     potential = carbon.get("potentialSavingKg")
 
@@ -487,10 +562,27 @@ def _fallback_grounded_answer(request: GenerateRequest) -> str:
     else:
         parts.append(f"{item_name}에 대한 근거 기준 설명입니다.")
     if p50 is not None:
-        parts.append(f"제공된 수요 중앙값은 {p50}{unit}입니다.")
+        parts.append(f"LightGBM 수요 예측의 중앙값은 {p50}{unit}입니다.")
+    delta_number = _to_float_or_none(recommendation_delta)
+    if historical_quantity is not None and delta_number is not None:
+        direction = "줄인" if delta_number < 0 else "늘린"
+        parts.append(
+            f"기존 발주량 {historical_quantity}{unit} 대비 {abs(delta_number):g}{unit} {direction} 수량입니다."
+        )
     if potential is not None:
         parts.append(f"제공된 잠재 탄소 절감량은 {potential}kgCO2e입니다.")
+    if quantity is not None:
+        parts.append("추천 수량은 과발주로 인한 폐기와 결품 위험을 함께 줄이는 방향으로 해석하면 됩니다.")
     return " ".join(parts)
+
+
+def _to_float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _stable_grounding_text(grounding: dict[str, Any]) -> str:

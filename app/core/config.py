@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     aws_session_token: str | None = None
     vector_db_path: Path = Path(".cache/vector_cache.sqlite3")
     semantic_cache_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
+    rag_knowledge_dir: Path = Path("app/data/knowledge")
+    rag_top_k: int = Field(default=4, ge=1, le=8)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

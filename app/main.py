@@ -30,6 +30,7 @@ from app.services.cache import ExactCache, cache_key
 from app.services.demo_data import build_order_request, closing_cache_payload, load_closing_data
 from app.services.llm import LocalLlamaClient
 from app.services.metrics import CacheMetrics
+from app.services.rag import LocalRagRetriever
 from app.services.semantic_cache import ChatSemanticCache
 from app.services.integration_status import build_integration_status
 from app.services.v1_contract import (
@@ -50,6 +51,7 @@ class AppState:
         self.exact_cache = ExactCache(settings.redis_url)
         self.llm_client = _build_llm_client(settings)
         self.chat_semantic_cache: ChatSemanticCache | None = None
+        self.rag_retriever = LocalRagRetriever(settings.rag_knowledge_dir, settings.rag_top_k)
         self.cache_metrics = CacheMetrics()
 
 
@@ -174,6 +176,7 @@ def v1_generate(payload: dict[str, Any] = Body(...)) -> GenerateResponse:
         request,
         semantic_cache=_chat_semantic_cache(state),
         llm_client=state.llm_client,
+        rag_retriever=state.rag_retriever,
     )
     if response.cache_hit:
         state.cache_metrics.semantic_hits += 1
@@ -190,6 +193,7 @@ def v1_chat(payload: dict[str, Any] = Body(...)) -> ChatResponse:
         request,
         semantic_cache=_chat_semantic_cache(state),
         llm_client=state.llm_client,
+        rag_retriever=state.rag_retriever,
     )
     if response.cache_hit:
         state.cache_metrics.semantic_hits += 1
