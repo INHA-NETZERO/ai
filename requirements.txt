@@ -1,3 +1,6 @@
+# Runtime dependencies used by Dockerfile and local FastAPI execution.
+# With Docker, you do not need to run `pip install -r requirements.txt` manually:
+# `docker compose up -d --build` installs these inside the ai-server image.
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic-settings==2.7.1

@@ -14,6 +14,12 @@
 
 이 레포는 로컬 실행과 데모 검증이 가능한 상태입니다. LLM은 기본적으로 로컬 Ollama의 Llama 3.2 1B를 호출합니다.
 
+- Docker 실행: 아래 명령어 하나로 FastAPI + Ollama + Redis가 함께 실행됩니다.
+
+```bash
+docker compose up -d --build
+```
+
 - Local Llama: `ollama pull llama3.2:1b` 후 Ollama 서버가 켜져 있으면 실제 LLM 답변을 반환합니다. 연결 실패 시 deterministic fallback 문장을 반환합니다.
 - Redis: `REDIS_URL`이 설정되면 exact cache 저장소로 사용됩니다. 없으면 인메모리 cache입니다.
 - Spring `/v1` S3 입력: 백엔드가 `salesHistory.presignedUrls`를 넘기면 AI 서버는 HTTP GET으로 CSV만 다운로드합니다. 이 경로는 S3 AWS key가 필요 없습니다.
@@ -26,12 +32,12 @@
 curl -s http://127.0.0.1:8000/integration-status | python -m json.tool
 ```
 
-## 로컬 Llama 설정
+## 로컬 직접 Llama 설정
 
 `/v1/generate`와 `/v1/chat`은 모두 `app/services/llm.py`의 `LocalLlamaClient`를 사용합니다.
 AI 서버는 grounding의 숫자를 바꾸거나 새 수치를 만들지 않고, 받은 근거를 한국어 설명으로만 바꿉니다.
 
-기본 방식은 Ollama입니다.
+이 섹션은 Docker를 쓰지 않고 로컬에서 직접 실행할 때만 필요합니다. Docker로 실행하면 `ollama` 컨테이너가 함께 뜨므로 로컬에서 `ollama serve`를 따로 실행하지 않아도 됩니다.
 
 ```bash
 ollama pull llama3.2:1b
@@ -79,21 +85,31 @@ LOCAL_GGUF_MODEL_PATH=/absolute/path/to/llama-3.2-1b-instruct.gguf
 
 ## Docker Compose 실행
 
-Docker로 한 번에 띄우면 `ai-server`, `ollama`, `redis`가 같은 네트워크에서 실행됩니다. AI 서버는 컨테이너 내부에서 `http://ollama:11434`로 Llama를 호출합니다.
-
-처음 실행:
-
-```bash
-docker compose up --build
-```
-
-첫 실행 시 `ollama-pull` 컨테이너가 `llama3.2:1b` 모델을 내려받습니다. 모델은 `ollama-models` Docker volume에 저장되므로 다음 실행부터는 다시 받지 않습니다.
-
-백그라운드 실행:
+Docker Desktop을 켠 뒤 아래 명령어 하나만 실행하면 됩니다.
 
 ```bash
 docker compose up -d --build
 ```
+
+이 명령 하나로 아래 컨테이너가 함께 실행됩니다.
+
+```text
+ai-server   FastAPI 서버, http://127.0.0.1:8000
+ollama      Llama 서버, 컨테이너 내부 주소 http://ollama:11434
+ollama-pull llama3.2:1b 모델 자동 다운로드 후 종료
+redis       캐시 서버, redis://redis:6379/0
+```
+
+AI 서버는 컨테이너 내부에서 Ollama와 Redis에 자동 연결됩니다.
+
+```text
+FastAPI -> http://ollama:11434
+FastAPI -> redis://redis:6379/0
+```
+
+따라서 Docker로 실행할 때는 로컬에서 `ollama serve`나 `pip install -r requirements.txt`를 따로 실행하지 않아도 됩니다. `requirements.txt`는 Docker 이미지 빌드 중 자동 설치됩니다.
+
+첫 실행 시 `ollama-pull` 컨테이너가 `llama3.2:1b` 모델을 내려받습니다. 모델은 `ollama-models` Docker volume에 저장되므로 다음 실행부터는 다시 받지 않습니다.
 
 상태 확인:
 
@@ -107,6 +123,15 @@ curl -s http://127.0.0.1:8000/health
 ```bash
 scripts/docker_smoke_test.sh
 ```
+
+Docker credential 오류가 나면 Docker Desktop을 켠 뒤 아래를 한 번 실행하고 다시 시도합니다.
+
+```bash
+export PATH="$PATH:/Applications/Docker.app/Contents/Resources/bin"
+docker compose up -d --build
+```
+
+그래도 `docker-credential-desktop` 오류가 나면 `~/.docker/config.json`에서 `"credsStore": "desktop"` 줄을 제거한 뒤 다시 실행합니다.
 
 로그 확인:
 
@@ -125,6 +150,27 @@ docker compose down
 
 ```bash
 docker compose down -v
+```
+
+참고: 로컬에 `app/models/demand_lgbm.txt`, `app/models/demand_lgbm_metadata.json`가 있으면 Docker 이미지에 함께 복사되어 `lgbm_global_v1` 예측을 사용합니다. 모델 파일이 없으면 서버는 `baseline_v1`로 안전하게 폴백합니다.
+
+## 로컬 직접 실행
+
+```bash
+pip install -r requirements.txt
+```
+
+Docker를 쓰지 않고 직접 실행할 때만 아래처럼 Ollama와 FastAPI를 각각 띄웁니다.
+
+```bash
+ollama pull llama3.2:1b
+ollama serve
+```
+
+다른 터미널:
+
+```bash
+.venv/bin/uvicorn app.main:app --reload
 ```
 
 ## Redis 설정
