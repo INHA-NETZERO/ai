@@ -11,8 +11,6 @@ import httpx
 import numpy as np
 
 from app.api_contracts import (
-    ChatbotRequest,
-    ChatbotResponse,
     DailyQuantilePrediction,
     GenerateRequest,
     GenerateResponse,
@@ -33,7 +31,6 @@ from app.services.demand_model import (
     _training_row_features,
 )
 from app.services.llm import LocalLlamaClient
-from app.services.rag import build_langchain_chat_context
 from app.services.semantic_cache import ChatSemanticCache
 
 
@@ -41,6 +38,19 @@ MODEL_VERSION = "lgbm_global_v1"
 BASELINE_MODEL_VERSION = "baseline_v1"
 LLM_MODEL_VERSION = "local-llama3.2-1b"
 SALES_CSV_COLUMNS_V1 = [
+    "날짜",
+    "요일",
+    "날씨",
+    "기온",
+    "강수mm",
+    "행사",
+    "신메뉴",
+    "품목",
+    "구분",
+    "판매수량",
+    "비고_시나리오",
+]
+EXTENDED_SALES_CSV_COLUMNS_V1 = [
     "날짜",
     "요일",
     "날씨",
@@ -128,9 +138,23 @@ def predict_single_day_quantiles(request: V1ForecastRequest) -> V1ForecastRespon
 
 def generate_grounded_answer(
     request: GenerateRequest,
+    semantic_cache: ChatSemanticCache,
     llm_client: LocalLlamaClient | None,
 ) -> GenerateResponse:
     start = time.perf_counter()
+    grounding_text = _stable_grounding_text(request.grounding)
+    grounding_hash = hashlib.sha256(grounding_text.encode("utf-8")).hexdigest()
+    namespace = f"v1:generate:{request.locale}:{grounding_hash}"
+    cached = semantic_cache.get(namespace, request.question)
+    if cached is not None:
+        response, _score = cached
+        return GenerateResponse(
+            answer=str(response["answer"]),
+            cacheHit=True,
+            latencyMs=_elapsed_ms(start),
+            tokens=int(response.get("tokens", 0)),
+        )
+
     answer = _fallback_grounded_answer(request)
     if llm_client is not None:
         try:
@@ -148,60 +172,8 @@ def generate_grounded_answer(
             answer = _fallback_grounded_answer(request)
 
     tokens = _estimate_tokens(request.question, request.grounding, answer)
+    semantic_cache.set(namespace, request.question, {"answer": answer, "tokens": tokens})
     return GenerateResponse(answer=answer, cacheHit=False, latencyMs=_elapsed_ms(start), tokens=tokens)
-
-
-def generate_chatbot_answer(
-    request: ChatbotRequest,
-    semantic_cache: ChatSemanticCache,
-    llm_client: LocalLlamaClient | None,
-) -> ChatbotResponse:
-    start = time.perf_counter()
-    sales_history_rows = _load_sales_history(request.sales_history.presigned_urls) if request.sales_history else []
-    rag_context, sources = build_langchain_chat_context(
-        question=request.question,
-        grounding=request.grounding,
-        sales_history_rows=sales_history_rows,
-    )
-    rag_hash = hashlib.sha256(rag_context.encode("utf-8")).hexdigest()
-    namespace = f"v1:chat:{request.locale}:{rag_hash}"
-    cached = semantic_cache.get(namespace, request.question)
-    if cached is not None:
-        response, _score = cached
-        return ChatbotResponse(
-            answer=str(response["answer"]),
-            sources=list(response.get("sources", [])),
-            cacheHit=True,
-            latencyMs=_elapsed_ms(start),
-            tokens=int(response.get("tokens", 0)),
-        )
-
-    answer = _fallback_grounded_answer(request)
-    if llm_client is not None:
-        try:
-            answer = llm_client.generate_text(
-                prompt=_chatbot_prompt(request, rag_context),
-                system_prompt=(
-                    "You are a Korean ordering assistant chatbot. "
-                    "Use only the RAG context prepared inside the AI server and the chat history. "
-                    "Do not invent, change, or recalculate numbers. "
-                    "Answer naturally in Korean."
-                ),
-                max_tokens=380,
-                temperature=0,
-            )
-        except Exception:
-            answer = _fallback_grounded_answer(request)
-
-    tokens = _estimate_tokens(request.question, request.grounding, answer)
-    semantic_cache.set(namespace, request.question, {"answer": answer, "sources": sources, "tokens": tokens})
-    return ChatbotResponse(
-        answer=answer,
-        sources=sources,
-        cacheHit=False,
-        latencyMs=_elapsed_ms(start),
-        tokens=tokens,
-    )
 
 
 def _baseline_quantile(ma7: float, trend: float, offset: int, weather: WeatherDay | None) -> QuantilePrediction:
@@ -416,7 +388,11 @@ def _load_sales_history(urls: list[str]) -> list[dict[str, str]]:
 def _parse_sales_csv(content: str) -> list[dict[str, str]]:
     reader = csv.DictReader(io.StringIO(content.lstrip("\ufeff")))
     fieldnames = list(reader.fieldnames or [])
-    if fieldnames not in [SALES_CSV_COLUMNS_V1, LEGACY_SALES_CSV_COLUMNS_WITH_HOLIDAY]:
+    if fieldnames not in [
+        SALES_CSV_COLUMNS_V1,
+        EXTENDED_SALES_CSV_COLUMNS_V1,
+        LEGACY_SALES_CSV_COLUMNS_WITH_HOLIDAY,
+    ]:
         return []
     return list(reader)
 
@@ -430,18 +406,7 @@ def _generate_prompt(request: GenerateRequest) -> str:
     )
 
 
-def _chatbot_prompt(request: ChatbotRequest, rag_context: str) -> str:
-    history = "\n".join(f"{message.role}: {message.content}" for message in request.history[-6:])
-    return (
-        f"질문: {request.question}\n"
-        f"언어: {request.locale}\n"
-        f"이전 대화:\n{history or '없음'}\n"
-        f"AI 서버 RAG 근거:\n{rag_context}\n"
-        "RAG 근거에 있는 사실과 숫자만 사용해서 점주가 이해하기 쉽게 답하세요."
-    )
-
-
-def _fallback_grounded_answer(request: GenerateRequest | ChatbotRequest) -> str:
+def _fallback_grounded_answer(request: GenerateRequest) -> str:
     grounding = request.grounding
     item = grounding.get("item", {})
     recommendation = grounding.get("recommendation", {})

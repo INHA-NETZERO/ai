@@ -7,7 +7,7 @@ from app.services.vector_store import SemanticCacheRecord, SQLiteVectorStore
 
 
 class ChatSemanticCache:
-    """Semantic cache reserved for low-power chatbot answers only."""
+    """Semantic cache reserved for low-power natural-language answers."""
 
     def __init__(self, settings: Settings) -> None:
         self.threshold = settings.semantic_cache_threshold
@@ -30,7 +30,7 @@ class ChatSemanticCache:
                 input_hash=cache_key("chat", payload),
                 embedding=self.embedding_service.embed(question),
                 response=response,
-                metadata={"source": "low_power_chatbot", "payload": stable_json(payload)},
+                metadata={"source": "low_power_llm_answer", "payload": stable_json(payload)},
             )
         )
 

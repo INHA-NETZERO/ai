@@ -8,8 +8,6 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ValidationError
 
 from app.api_contracts import (
-    ChatbotRequest,
-    ChatbotResponse,
     GenerateRequest,
     GenerateResponse,
     V1ForecastRequest,
@@ -22,8 +20,6 @@ from app.engines.deterministic import forecast_demand_from_closing_data, recomme
 from app.schemas import (
     CacheInfo,
     CacheStatusResponse,
-    ChatRequest,
-    ChatResponse,
     ForecastResponse,
     IntegrationStatusResponse,
     OrderRecommendationResponse,
@@ -32,13 +28,11 @@ from app.services.cache import ExactCache, cache_key
 from app.services.demo_data import build_order_request, closing_cache_payload, load_closing_data
 from app.services.llm import LocalLlamaClient
 from app.services.metrics import CacheMetrics
-from app.services.rag import build_order_rag_context
 from app.services.semantic_cache import ChatSemanticCache
 from app.services.integration_status import build_integration_status
 from app.services.v1_contract import (
     LLM_MODEL_VERSION,
     MODEL_VERSION,
-    generate_chatbot_answer,
     generate_grounded_answer,
     predict_order_quantiles,
     predict_single_day_quantiles,
@@ -173,24 +167,7 @@ def v1_forecast(payload: dict[str, Any] = Body(...)) -> V1ForecastResponse:
 def v1_generate(payload: dict[str, Any] = Body(...)) -> GenerateResponse:
     request = _validate_body(GenerateRequest, payload)
     state: AppState = app.state.runtime
-    exact_key = cache_key("v1/generate", request.model_dump(by_alias=True))
-    cached = state.exact_cache.get(exact_key)
-    if cached is not None:
-        state.cache_metrics.exact_hits += 1
-        cached["cacheHit"] = True
-        return GenerateResponse.model_validate(cached)
-
-    state.cache_metrics.exact_misses += 1
-    response = generate_grounded_answer(request, llm_client=state.llm_client)
-    state.exact_cache.set(exact_key, response.model_dump(by_alias=True))
-    return response
-
-
-@app.post("/v1/chat", response_model=ChatbotResponse)
-def v1_chat(payload: dict[str, Any] = Body(...)) -> ChatbotResponse:
-    request = _validate_body(ChatbotRequest, payload)
-    state: AppState = app.state.runtime
-    response = generate_chatbot_answer(
+    response = generate_grounded_answer(
         request,
         semantic_cache=_chat_semantic_cache(state),
         llm_client=state.llm_client,
@@ -232,29 +209,6 @@ def order_recommendation() -> OrderRecommendationResponse:
     )
 
 
-@app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
-    state: AppState = app.state.runtime
-    data = load_closing_data(state.settings)
-    namespace = f"chat:{data['store_id']}:{data['business_date']}:{data['data_version']}"
-    chat_semantic_cache = _chat_semantic_cache(state)
-    cached = chat_semantic_cache.get(namespace, request.question)
-    if cached is not None:
-        response, score = cached
-        if response.get("sources"):
-            state.cache_metrics.semantic_hits += 1
-            response["cache"] = CacheInfo(semantic_hit=True, semantic_score=score).model_dump()
-            return ChatResponse.model_validate(response)
-    state.cache_metrics.semantic_misses += 1
-
-    forecast_response = forecast_demand_from_closing_data(data)
-    order_response = recommend_orders(build_order_request(data, forecast_response.forecasts))
-    answer, sources = _build_chat_answer(data, forecast_response, order_response, request.question)
-    response = ChatResponse(answer=answer, sources=sources).model_dump()
-    chat_semantic_cache.set(namespace, request.question, response)
-    return ChatResponse.model_validate(response)
-
-
 def _cached_response(
     endpoint: str,
     payload: dict[str, Any],
@@ -281,45 +235,3 @@ def _chat_semantic_cache(state: AppState) -> ChatSemanticCache:
     if state.chat_semantic_cache is None:
         state.chat_semantic_cache = ChatSemanticCache(state.settings)
     return state.chat_semantic_cache
-
-
-def _build_chat_answer(
-    data: dict[str, Any],
-    forecast_response: ForecastResponse,
-    order_response: OrderRecommendationResponse,
-    question: str,
-) -> tuple[str, list[str]]:
-    state: AppState = app.state.runtime
-    rag_context, sources = build_order_rag_context(data, forecast_response, order_response, question)
-    prompt = (
-        f"점주 질문: {question}\n"
-        f"매장: {data['store_id']}\n"
-        f"마감일: {data['business_date']}\n"
-        f"RAG 근거:\n{rag_context}\n"
-        "위 근거 안에서만 답하고, 계산값은 바꾸지 말고 추천 근거를 짧게 설명해줘."
-    )
-    if state.llm_client is None:
-        return _fallback_summary(data, order_response), sources
-    try:
-        return state.llm_client.generate_text(
-            prompt=prompt,
-            system_prompt=(
-                "You are a local Llama ordering explanation chatbot. "
-                "Answer in Korean, cite only the provided POS closing and recommendation context, "
-                "and do not change numeric recommendations."
-            ),
-            max_tokens=400,
-            temperature=0,
-        ), sources
-    except Exception:
-        return _fallback_summary(data, order_response), sources
-
-
-def _fallback_summary(data: dict[str, Any], order_response: OrderRecommendationResponse) -> str:
-    lines = [f"{data['business_date']} 마감 기준 발주 추천입니다."]
-    for item in order_response.recommendations:
-        lines.append(
-            f"{item.sku}: {item.recommended_quantity:g}개 추천 "
-            f"(기준재고 {item.base_stock_level:g}, 예상가용 {item.projected_position:g})."
-        )
-    return " ".join(lines)

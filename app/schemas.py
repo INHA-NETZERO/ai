@@ -56,16 +56,6 @@ class OrderRecommendationResponse(BaseModel):
     cache: CacheInfo = Field(default_factory=CacheInfo)
 
 
-class ChatRequest(BaseModel):
-    question: str = Field(..., min_length=1)
-
-
-class ChatResponse(BaseModel):
-    answer: str
-    sources: list[str] = Field(default_factory=list)
-    cache: CacheInfo = Field(default_factory=CacheInfo)
-
-
 class CacheStatusResponse(BaseModel):
     exact_cache_backend: str
     semantic_cache_backend: str
