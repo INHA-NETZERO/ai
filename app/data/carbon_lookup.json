@@ -1,0 +1,18 @@
+{
+  "material_factors_kg_co2e_per_kg": {
+    "produce": 0.7,
+    "grain": 0.9,
+    "meat": 27.0,
+    "dairy": 3.2,
+    "beverage": 0.8,
+    "packaging": 2.4,
+    "default": 1.8
+  },
+  "transport_factors_kg_co2e_per_ton_km": {
+    "truck": 0.12,
+    "rail": 0.035,
+    "ship": 0.01,
+    "air": 0.6
+  },
+  "source": "Demo baseline lookup table. Replace with project-approved LCA or supplier-specific factors before production use."
+}
