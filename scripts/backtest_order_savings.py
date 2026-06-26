@@ -20,21 +20,22 @@ def main() -> None:
     parser.add_argument("--item-master", default=str(ITEM_MASTER_PATH))
     parser.add_argument("--order-policy", default=str(ORDER_POLICY_PATH))
     parser.add_argument("--policy", choices=["base_stock", "ortools"], default="base_stock")
-    parser.add_argument("--item-type", action="append", default=[], help="Defaults to 완제품 when omitted.")
+    parser.add_argument("--item-type", action="append", default=[], help="Optional item type filter. Omit to include all types.")
     parser.add_argument("--min-history-days", type=int, default=14)
     parser.add_argument("--output", default="app/data/predictions/backtest_order_savings.csv")
     parser.add_argument("--report", help="Optional Markdown report path. Defaults to <output stem>_report.md.")
     parser.add_argument("--limit", type=int, default=20)
     args = parser.parse_args()
 
-    item_types = _unique(args.item_type or ["완제품"])
+    item_types = _unique(args.item_type)
     inventory_flow = _read_csv(Path(args.inventory_flow))
     item_master = _read_csv(Path(args.item_master))
     order_policy = _read_csv(Path(args.order_policy))
-    allowed_types = set(item_types)
-    inventory_flow = [row for row in inventory_flow if row.get("구분") in allowed_types]
-    item_master = [row for row in item_master if row.get("구분") in allowed_types]
-    order_policy = [row for row in order_policy if row.get("구분") in allowed_types]
+    if item_types:
+        allowed_types = set(item_types)
+        inventory_flow = [row for row in inventory_flow if row.get("구분") in allowed_types]
+        item_master = [row for row in item_master if row.get("구분") in allowed_types]
+        order_policy = [row for row in order_policy if row.get("구분") in allowed_types]
     if not inventory_flow:
         raise SystemExit("No inventory rows to backtest.")
 
@@ -119,6 +120,7 @@ def _summary(rows: list[dict[str, Any]], item_type_filter: list[str], order_meth
         "forecast_method": "lightgbm_saved_model",
         "order_method": order_method,
         "items": len(rows),
+        "distinct_items": len({row["itemName"] for row in rows}),
         "ordered_items": ordered_items,
         "backtest_days": len(dates),
         "min_history_days": min_history_days,
@@ -142,6 +144,7 @@ def _backtest_human_summary(summary: dict[str, Any]) -> str:
             f"대상: {item_filter_text}",
             f"백테스트 일수: {summary['backtest_days']}일",
             f"초기 히스토리 제외: {summary['min_history_days']}일",
+            f"대상 품목 수: {summary['distinct_items']}개",
             f"예측 모델: {summary['forecast_method']}",
             f"발주 정책: {summary['order_method']}",
             f"발주 추천 건수: {summary['ordered_items']} / {summary['items']}건",

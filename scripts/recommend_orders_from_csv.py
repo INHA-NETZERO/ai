@@ -181,6 +181,7 @@ def _summary(
         "forecast_method": forecast_method,
         "order_method": order_method,
         "items": len(rows),
+        "distinct_items": len({row["itemName"] for row in rows}),
         "ordered_items": ordered_items,
         "total_forecast_demand": total_forecast,
         "total_recommended_quantity": total_recommended,
@@ -252,6 +253,7 @@ def _human_summary(summary: dict[str, Any]) -> str:
             f"대상: {item_filter_text}",
             f"예측 모델: {summary['forecast_method']}",
             f"발주 정책: {summary['order_method']}",
+            f"대상 품목 수: {summary['distinct_items']}개",
             f"발주 추천 품목: {summary['ordered_items']} / {summary['items']}개",
             f"예측 수요 합계: {summary['total_forecast_demand']}",
             f"추천 발주량 합계: {summary['total_recommended_quantity']}",
@@ -278,6 +280,7 @@ def _human_table(rows: list[dict[str, Any]]) -> str:
 def _markdown_table(rows: list[dict[str, Any]]) -> str:
     headers = [
         "품목",
+        "단위",
         "현재재고",
         "최근수요",
         "예측수요합계",
@@ -294,6 +297,7 @@ def _markdown_table(rows: list[dict[str, Any]]) -> str:
     for row in rows:
         values = [
             row["itemName"],
+            row["unit"],
             _format_number(row["current_stock"]),
             _format_number(row["latest_demand"]),
             _format_number(row["forecast_total"]),
