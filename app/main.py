@@ -29,7 +29,7 @@ from app.schemas import (
 )
 from app.services.cache import ExactCache, cache_key
 from app.services.aws_metrics import AwsMetricsClient
-from app.services.demo_data import build_order_request, closing_cache_payload, load_demo_closing_data
+from app.services.demo_data import build_order_request, closing_cache_payload, load_closing_data
 from app.services.llm import BedrockLlamaClient
 from app.services.metrics import CacheMetrics
 from app.services.rag import build_order_rag_context
@@ -208,14 +208,16 @@ def _validate_body(model: type[ResponseT], payload: dict[str, Any]) -> ResponseT
 
 @app.post("/forecast", response_model=ForecastResponse)
 def forecast() -> ForecastResponse:
-    data = load_demo_closing_data()
+    state: AppState = app.state.runtime
+    data = load_closing_data(state.settings)
     payload = closing_cache_payload(data)
     return _cached_response("forecast", payload, ForecastResponse, lambda: forecast_demand_from_closing_data(data))
 
 
 @app.post("/order-recommendation", response_model=OrderRecommendationResponse)
 def order_recommendation() -> OrderRecommendationResponse:
-    data = load_demo_closing_data()
+    state: AppState = app.state.runtime
+    data = load_closing_data(state.settings)
     forecast_response = forecast_demand_from_closing_data(data)
     request = build_order_request(data, forecast_response.forecasts)
     payload = closing_cache_payload(data) | {"policy": request.policy}
@@ -229,7 +231,8 @@ def order_recommendation() -> OrderRecommendationResponse:
 
 @app.post("/daily-close", response_model=DailyCloseResponse)
 def daily_close() -> DailyCloseResponse:
-    data = load_demo_closing_data()
+    state: AppState = app.state.runtime
+    data = load_closing_data(state.settings)
     payload = closing_cache_payload(data) | {"output": "llm_summary"}
 
     def factory() -> DailyCloseResponse:
@@ -251,7 +254,7 @@ def daily_close() -> DailyCloseResponse:
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest) -> ChatResponse:
     state: AppState = app.state.runtime
-    data = load_demo_closing_data()
+    data = load_closing_data(state.settings)
     namespace = f"chat:{data['store_id']}:{data['business_date']}:{data['data_version']}"
     chat_semantic_cache = _chat_semantic_cache(state)
     cached = chat_semantic_cache.get(namespace, request.question)

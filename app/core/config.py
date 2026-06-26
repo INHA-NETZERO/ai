@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     data_source: str = "local"
     s3_bucket: str | None = None
     s3_prefix: str = ""
+    s3_inventory_flow_key: str = "inventory_flow_5days.csv"
+    s3_item_master_key: str = "item_master.csv"
+    s3_order_policy_key: str = "order_policy.csv"
+    store_id: str = "inha-store-001"
     llm_provider: str = "bedrock"
     aws_region: str = "us-east-1"
     bedrock_model_id: str = "meta.llama3-2-1b-instruct-v1:0"

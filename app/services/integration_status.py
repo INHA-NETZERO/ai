@@ -35,10 +35,17 @@ def build_integration_status(
         "data_source": {
             "active": settings.data_source,
             "local_csv_active": settings.data_source == "local",
+            "s3_active": settings.data_source == "s3",
             "s3_configured": s3_configured,
             "s3_bucket_configured": bool(settings.s3_bucket),
             "s3_prefix": settings.s3_prefix,
-            "s3_loader_implemented": False,
+            "s3_keys": {
+                "inventory_flow": settings.s3_inventory_flow_key,
+                "item_master": settings.s3_item_master_key,
+                "order_policy": settings.s3_order_policy_key,
+            },
+            "s3_loader_implemented": True,
+            "s3_requires_aws_credentials": settings.data_source == "s3",
         },
         "cache": {
             "exact_cache_backend": exact_cache_backend,
@@ -117,9 +124,11 @@ def _integration_gaps(
     if settings.llm_provider == "bedrock" and not aws_credentials_configured:
         gaps.append("AWS credentials are not configured, so Bedrock Llama calls will fall back to deterministic text.")
     if settings.data_source == "local":
-        gaps.append("API endpoints currently read local app/data CSV files, not S3.")
-    if s3_configured:
-        gaps.append("S3 settings are present, but an S3 CSV loader is not implemented yet.")
+        gaps.append("API endpoints currently read local app/data CSV files. Set DATA_SOURCE=s3 to read S3 CSV files.")
+    if settings.data_source == "s3" and not s3_configured:
+        gaps.append("DATA_SOURCE=s3 is active but S3_BUCKET is not configured.")
+    if settings.data_source == "s3" and not aws_credentials_configured:
+        gaps.append("DATA_SOURCE=s3 is active but AWS credentials are not configured.")
     if exact_cache_backend == "memory":
         gaps.append("Exact cache is using process memory; Redis/ElastiCache is not active.")
     if cloudwatch_configured and not aws_credentials_configured:

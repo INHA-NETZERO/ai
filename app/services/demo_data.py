@@ -1,10 +1,15 @@
 import csv
+import io
 import re
 from collections import defaultdict
 from pathlib import Path
 from statistics import pstdev
 from typing import Any
 
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+
+from app.core.config import Settings, get_settings
 from app.schemas import ForecastPoint, ForecastRequest, InventoryPosition, OrderRecommendationRequest
 
 
@@ -43,10 +48,51 @@ REQUIRED_POLICY_COLUMNS = {
 
 
 def load_demo_closing_data() -> dict[str, Any]:
-    inventory_flow = _read_csv(INVENTORY_FLOW_PATH)
-    item_master = _read_csv(ITEM_MASTER_PATH)
+    return _build_closing_data(
+        store_id="inha-store-001",
+        data_version="csv-demo-v1",
+        inventory_flow=_read_csv(INVENTORY_FLOW_PATH),
+        item_master=_read_csv(ITEM_MASTER_PATH),
+        order_policy=_read_csv(ORDER_POLICY_PATH),
+    )
+
+
+def load_closing_data(settings: Settings | None = None) -> dict[str, Any]:
+    settings = settings or get_settings()
+    if settings.data_source.lower() == "s3":
+        return _load_s3_closing_data(settings)
+    return load_demo_closing_data()
+
+
+def _load_s3_closing_data(settings: Settings) -> dict[str, Any]:
+    if not settings.s3_bucket:
+        raise ValueError("S3_BUCKET is required when DATA_SOURCE=s3")
+
+    inventory_key = _s3_key(settings.s3_prefix, settings.s3_inventory_flow_key)
+    item_master_key = _s3_key(settings.s3_prefix, settings.s3_item_master_key)
+    order_policy_key = _s3_key(settings.s3_prefix, settings.s3_order_policy_key)
+    inventory_flow = _read_s3_csv(settings, inventory_key)
+    item_master = _read_s3_csv(settings, item_master_key)
+    order_policy = _read_s3_csv(settings, order_policy_key)
+    latest_date = max(row["날짜"] for row in inventory_flow)
+    return _build_closing_data(
+        store_id=settings.store_id,
+        data_version=f"s3:{settings.s3_bucket}:{inventory_key}:{latest_date}",
+        inventory_flow=inventory_flow,
+        item_master=item_master,
+        order_policy=order_policy,
+    )
+
+
+def _build_closing_data(
+    store_id: str,
+    data_version: str,
+    inventory_flow: list[dict[str, str]],
+    item_master: list[dict[str, str]],
+    order_policy: list[dict[str, str]],
+) -> dict[str, Any]:
     order_policy = [
-        row for row in _read_csv(ORDER_POLICY_PATH)
+        row for row in order_policy
         if VALID_ITEM_ID_PATTERN.match(row.get("품목ID", ""))
     ]
     _validate_columns("inventory_flow_5days.csv", inventory_flow, REQUIRED_INVENTORY_COLUMNS)
@@ -55,9 +101,9 @@ def load_demo_closing_data() -> dict[str, Any]:
     _validate_item_links(inventory_flow, item_master, order_policy)
     latest_date = max(row["날짜"] for row in inventory_flow)
     return {
-        "store_id": "inha-store-001",
+        "store_id": store_id,
         "business_date": latest_date,
-        "data_version": "csv-demo-v1",
+        "data_version": data_version,
         "inventory_flow": inventory_flow,
         "item_master": item_master,
         "order_policy": order_policy,
@@ -121,6 +167,22 @@ def closing_cache_payload(data: dict[str, Any]) -> dict[str, str]:
 def _read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(encoding="utf-8-sig", newline="") as csv_file:
         return list(csv.DictReader(csv_file))
+
+
+def _read_s3_csv(settings: Settings, key: str) -> list[dict[str, str]]:
+    try:
+        client = boto3.client("s3", region_name=settings.aws_region)
+        response = client.get_object(Bucket=settings.s3_bucket, Key=key)
+        body = response["Body"].read().decode("utf-8-sig")
+    except (BotoCoreError, ClientError, KeyError, UnicodeDecodeError) as exc:
+        raise RuntimeError(f"failed to load s3://{settings.s3_bucket}/{key}") from exc
+    return list(csv.DictReader(io.StringIO(body)))
+
+
+def _s3_key(prefix: str, key: str) -> str:
+    clean_prefix = prefix.strip("/")
+    clean_key = key.lstrip("/")
+    return f"{clean_prefix}/{clean_key}" if clean_prefix else clean_key
 
 
 def _validate_columns(file_name: str, rows: list[dict[str, str]], required: set[str]) -> None:

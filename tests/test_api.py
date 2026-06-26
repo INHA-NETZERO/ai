@@ -1,8 +1,16 @@
 from fastapi.testclient import TestClient
+from io import BytesIO
 from uuid import uuid4
 
+from app.core.config import Settings
 from app.main import app
-from app.services.demo_data import load_demo_closing_data
+from app.services.demo_data import (
+    INVENTORY_FLOW_PATH,
+    ITEM_MASTER_PATH,
+    ORDER_POLICY_PATH,
+    load_closing_data,
+    load_demo_closing_data,
+)
 
 
 def test_health() -> None:
@@ -223,3 +231,36 @@ def test_csv_demo_data_columns_and_links_are_valid() -> None:
     assert len(data["inventory_flow"]) == 45
     assert len(data["item_master"]) == 28
     assert len(data["order_policy"]) == 28
+
+
+def test_s3_closing_data_loader_uses_configured_keys(monkeypatch) -> None:
+    objects = {
+        "daily/closing/inventory_flow_5days.csv": INVENTORY_FLOW_PATH.read_bytes(),
+        "daily/closing/item_master.csv": ITEM_MASTER_PATH.read_bytes(),
+        "daily/closing/order_policy.csv": ORDER_POLICY_PATH.read_bytes(),
+    }
+    calls = []
+
+    class FakeS3Client:
+        def get_object(self, Bucket: str, Key: str):
+            calls.append((Bucket, Key))
+            return {"Body": BytesIO(objects[Key])}
+
+    monkeypatch.setattr("app.services.demo_data.boto3.client", lambda *args, **kwargs: FakeS3Client())
+    settings = Settings(
+        data_source="s3",
+        s3_bucket="zero-wave-demo",
+        s3_prefix="daily/closing",
+        aws_region="ap-northeast-2",
+    )
+
+    data = load_closing_data(settings)
+
+    assert data["store_id"] == "inha-store-001"
+    assert data["data_version"].startswith("s3:zero-wave-demo:daily/closing/inventory_flow_5days.csv")
+    assert len(data["inventory_flow"]) == 45
+    assert calls == [
+        ("zero-wave-demo", "daily/closing/inventory_flow_5days.csv"),
+        ("zero-wave-demo", "daily/closing/item_master.csv"),
+        ("zero-wave-demo", "daily/closing/order_policy.csv"),
+    ]
