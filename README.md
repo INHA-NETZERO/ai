@@ -62,6 +62,22 @@ Bedrock API key를 받은 경우 `AWS_BEARER_TOKEN_BEDROCK` 하나만 넣으면 
 
 Spring 백엔드가 S3 presigned URL을 넘겨주는 `/v1/forecast`, `/v1/order-recommendation`에서는 S3 인증키가 필요 없습니다. AI 서버가 필요한 AWS 인증은 Bedrock Llama 호출용입니다.
 
+Bedrock API key 방식으로 호출하려면 API key를 만든 IAM 사용자/역할에 최소한 아래 권한이 필요합니다.
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "bedrock:CallWithBearerToken",
+    "bedrock:Converse",
+    "bedrock:InvokeModel"
+  ],
+  "Resource": "*"
+}
+```
+
+`bedrock:CallWithBearerToken`이 없으면 토큰이 만료되지 않았고 모델 ID가 맞아도 `403 AccessDeniedException`이 발생합니다.
+
 로컬에서 Bedrock 연결만 빠르게 확인하려면 `.env`에 키를 넣은 뒤 아래 명령을 실행합니다.
 
 ```bash
@@ -79,6 +95,12 @@ export BEDROCK_MODEL_ID=meta.llama3-2-1b-instruct-v1:0
 
 만약 계정이 regional inference profile만 허용하면 `BEDROCK_MODEL_ID`를
 `us.meta.llama3-2-1b-instruct-v1:0`로 바꿔서 실행합니다.
+
+권한과 토큰 만료 여부를 함께 보려면 아래 진단 스크립트를 사용합니다.
+
+```bash
+.venv/bin/python scripts/diagnose_bedrock_access.py
+```
 
 정상 연결이면 짧은 한국어 응답이 출력됩니다. `403 Forbidden`이 나오면 AI 서버 코드는 AWS까지 도달한 상태이고, API key 유효성, Bedrock 모델 액세스, 리전, 해당 모델 호출 권한을 AWS 콘솔에서 확인해야 합니다.
 
