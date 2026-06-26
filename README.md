@@ -77,6 +77,56 @@ LOCAL_LLM_BACKEND=llama_cpp
 LOCAL_GGUF_MODEL_PATH=/absolute/path/to/llama-3.2-1b-instruct.gguf
 ```
 
+## Docker Compose 실행
+
+Docker로 한 번에 띄우면 `ai-server`, `ollama`, `redis`가 같은 네트워크에서 실행됩니다. AI 서버는 컨테이너 내부에서 `http://ollama:11434`로 Llama를 호출합니다.
+
+처음 실행:
+
+```bash
+docker compose up --build
+```
+
+첫 실행 시 `ollama-pull` 컨테이너가 `llama3.2:1b` 모델을 내려받습니다. 모델은 `ollama-models` Docker volume에 저장되므로 다음 실행부터는 다시 받지 않습니다.
+
+백그라운드 실행:
+
+```bash
+docker compose up -d --build
+```
+
+상태 확인:
+
+```bash
+docker compose ps
+curl -s http://127.0.0.1:8000/health
+```
+
+기능 전체 간단 테스트:
+
+```bash
+scripts/docker_smoke_test.sh
+```
+
+로그 확인:
+
+```bash
+docker compose logs -f ai-server
+docker compose logs -f ollama
+```
+
+종료:
+
+```bash
+docker compose down
+```
+
+모델과 Redis 데이터 volume까지 지우려면:
+
+```bash
+docker compose down -v
+```
+
 ## Redis 설정
 
 exact cache를 Redis로 사용하려면 `.env`의 `REDIS_URL`을 Redis endpoint로 설정합니다.

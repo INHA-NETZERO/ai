@@ -1,0 +1,74 @@
+services:
+  ai-server:
+    build:
+      context: .
+    container_name: netzero-ai-server
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: Net-Zero AI Server
+      ENVIRONMENT: docker
+      DATA_SOURCE: local
+      REDIS_URL: redis://redis:6379/0
+      LLM_PROVIDER: local
+      LOCAL_LLM_BACKEND: ollama
+      LOCAL_LLM_MODEL: llama3.2:1b
+      OLLAMA_BASE_URL: http://ollama:11434
+      VECTOR_DB_PATH: /app/.cache/vector_cache.sqlite3
+      SEMANTIC_CACHE_THRESHOLD: "0.92"
+    volumes:
+      - ai-cache:/app/.cache
+    depends_on:
+      redis:
+        condition: service_started
+      ollama:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: netzero-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: netzero-ollama-pull
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    command: ["pull", "llama3.2:1b"]
+    depends_on:
+      ollama:
+        condition: service_started
+    restart: "no"
+
+  redis:
+    image: redis:7-alpine
+    container_name: netzero-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  ai-cache:
+  ollama-models:
+  redis-data:
