@@ -1,14 +1,16 @@
 import json
 from typing import Any
 
-import boto3
 from botocore.exceptions import BotoCoreError, ClientError
+
+from app.core.config import Settings
+from app.services.aws_clients import create_aws_client
 
 
 class BedrockLlamaClient:
-    def __init__(self, region_name: str, model_id: str) -> None:
-        self.model_id = model_id
-        self._client = boto3.client("bedrock-runtime", region_name=region_name)
+    def __init__(self, settings: Settings) -> None:
+        self.model_id = settings.bedrock_model_id
+        self._client = create_aws_client("bedrock-runtime", settings)
 
     def generate_text(
         self,

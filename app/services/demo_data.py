@@ -6,11 +6,11 @@ from pathlib import Path
 from statistics import pstdev
 from typing import Any
 
-import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import Settings, get_settings
 from app.schemas import ForecastPoint, ForecastRequest, InventoryPosition, OrderRecommendationRequest
+from app.services.aws_clients import create_aws_client
 
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
@@ -171,7 +171,7 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
 
 def _read_s3_csv(settings: Settings, key: str) -> list[dict[str, str]]:
     try:
-        client = boto3.client("s3", region_name=settings.aws_region)
+        client = create_aws_client("s3", settings)
         response = client.get_object(Bucket=settings.s3_bucket, Key=key)
         body = response["Body"].read().decode("utf-8-sig")
     except (BotoCoreError, ClientError, KeyError, UnicodeDecodeError) as exc:

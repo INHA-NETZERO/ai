@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import Settings
+from app.services.aws_clients import create_aws_client
 
 
 ELASTICACHE_METRICS = [
@@ -20,7 +20,7 @@ ELASTICACHE_METRICS = [
 class AwsMetricsClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._client = boto3.client("cloudwatch", region_name=settings.aws_region)
+        self._client = create_aws_client("cloudwatch", settings)
 
     def get_elasticache_metrics(self) -> dict[str, Any] | None:
         dimension = _elasticache_dimension(self.settings)

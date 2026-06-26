@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     store_id: str = "inha-store-001"
     llm_provider: str = "bedrock"
     aws_region: str = "us-east-1"
+    aws_profile: str | None = None
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
     bedrock_model_id: str = "meta.llama3-2-1b-instruct-v1:0"
     elasticache_replication_group_id: str | None = None
     elasticache_cache_cluster_id: str | None = None

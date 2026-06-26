@@ -58,7 +58,7 @@ class AppState:
 
 def _build_bedrock_client(settings: Settings) -> BedrockLlamaClient | None:
     try:
-        return BedrockLlamaClient(settings.aws_region, settings.bedrock_model_id)
+        return BedrockLlamaClient(settings)
     except Exception:
         return None
 

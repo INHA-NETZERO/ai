@@ -53,6 +53,8 @@ Bedrock 호출에 필요한 런타임 설정:
 LLM_PROVIDER=bedrock
 AWS_REGION=us-east-1
 BEDROCK_MODEL_ID=meta.llama3-2-1b-instruct-v1:0
+AWS_ACCESS_KEY_ID=<받은 Bedrock IAM access key>
+AWS_SECRET_ACCESS_KEY=<받은 Bedrock IAM secret key>
 ```
 
 AWS 인증은 boto3 기본 인증 체인을 따릅니다. 환경변수, AWS CLI profile, IAM Role 등을 사용할 수 있습니다. 서버는 `bedrock-runtime`의 Converse API를 먼저 사용하고, 실패하면 `invoke_model`로 fallback합니다.
@@ -60,6 +62,14 @@ AWS 인증은 boto3 기본 인증 체인을 따릅니다. 환경변수, AWS CLI 
 주의: AWS key/profile/IAM Role이 없으면 Bedrock API 호출은 성공하지 않습니다. 이 경우 서버는 죽지 않고 fallback 요약문을 반환하지만, 그것은 Llama가 생성한 답변이 아닙니다.
 
 Spring 백엔드가 S3 presigned URL을 넘겨주는 `/v1/forecast`, `/v1/order-recommendation`에서는 S3 인증키가 필요 없습니다. AI 서버가 필요한 AWS 인증은 Bedrock Llama 호출용입니다.
+
+로컬에서 Bedrock 연결만 빠르게 확인하려면 `.env`에 키를 넣은 뒤 아래 명령을 실행합니다.
+
+```bash
+.venv/bin/python scripts/check_bedrock.py
+```
+
+정상 연결이면 짧은 한국어 응답이 출력됩니다. 실패하면 region, model access, IAM 권한을 확인하세요.
 
 ## ElastiCache 설정
 

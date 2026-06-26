@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from app.core.config import Settings
 from app.main import app
+from app.services.aws_clients import create_aws_session
 from app.services.demo_data import (
     INVENTORY_FLOW_PATH,
     ITEM_MASTER_PATH,
@@ -290,7 +291,7 @@ def test_s3_closing_data_loader_uses_configured_keys(monkeypatch) -> None:
             calls.append((Bucket, Key))
             return {"Body": BytesIO(objects[Key])}
 
-    monkeypatch.setattr("app.services.demo_data.boto3.client", lambda *args, **kwargs: FakeS3Client())
+    monkeypatch.setattr("app.services.demo_data.create_aws_client", lambda *args, **kwargs: FakeS3Client())
     settings = Settings(
         data_source="s3",
         s3_bucket="zero-wave-demo",
@@ -308,3 +309,28 @@ def test_s3_closing_data_loader_uses_configured_keys(monkeypatch) -> None:
         ("zero-wave-demo", "daily/closing/item_master.csv"),
         ("zero-wave-demo", "daily/closing/order_policy.csv"),
     ]
+
+
+def test_aws_session_uses_env_file_credentials(monkeypatch) -> None:
+    captured = {}
+
+    class FakeSession:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("app.services.aws_clients.boto3.Session", FakeSession)
+    settings = Settings(
+        aws_region="us-east-1",
+        aws_access_key_id="access",
+        aws_secret_access_key="secret",
+        aws_session_token="token",
+    )
+
+    create_aws_session(settings)
+
+    assert captured == {
+        "region_name": "us-east-1",
+        "aws_access_key_id": "access",
+        "aws_secret_access_key": "secret",
+        "aws_session_token": "token",
+    }
