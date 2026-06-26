@@ -30,13 +30,13 @@ from app.services.demand_model import (
     _korean_weekday,
     _training_row_features,
 )
-from app.services.llm import BedrockLlamaClient
+from app.services.llm import LocalLlamaClient
 from app.services.semantic_cache import ChatSemanticCache
 
 
 MODEL_VERSION = "lgbm_global_v1"
 BASELINE_MODEL_VERSION = "baseline_v1"
-LLM_MODEL_VERSION = "bedrock-llama3.2-1b-converse"
+LLM_MODEL_VERSION = "local-llama3.2-1b"
 SALES_CSV_COLUMNS_V1 = [
     "날짜",
     "요일",
@@ -126,7 +126,7 @@ def predict_single_day_quantiles(request: V1ForecastRequest) -> V1ForecastRespon
 def generate_grounded_answer(
     request: GenerateRequest,
     semantic_cache: ChatSemanticCache,
-    llm_client: BedrockLlamaClient | None,
+    llm_client: LocalLlamaClient | None,
 ) -> GenerateResponse:
     start = time.perf_counter()
     grounding_text = _stable_grounding_text(request.grounding)

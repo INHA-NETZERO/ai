@@ -62,8 +62,7 @@ def check_direct_s3() -> None:
     except NoCredentialsError as exc:
         raise SystemExit(
             "AWS credentials were not found for direct S3. "
-            "Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, AWS_PROFILE, or run on an IAM role. "
-            "AWS_BEARER_TOKEN_BEDROCK is only for Bedrock and cannot read S3."
+            "Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, AWS_PROFILE, or run on an IAM role."
         ) from exc
     except ClientError as exc:
         code = exc.response.get("Error", {}).get("Code", "Unknown")

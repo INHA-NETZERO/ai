@@ -26,12 +26,13 @@ def build_integration_status(
         "aws": aws_credentials,
         "llm": {
             "provider": settings.llm_provider,
-            "bedrock_model_id": settings.bedrock_model_id,
-            "credentials_configured": aws_credentials["configured"],
-            "actual_bedrock_call_ready": False,
+            "backend": settings.local_llm_backend,
+            "model": settings.local_llm_model,
+            "ollama_base_url": settings.ollama_base_url,
+            "configured": settings.llm_provider == "local",
             "readiness_note": (
                 "This endpoint reports local configuration only. "
-                "Run scripts/check_bedrock.py to verify real Bedrock permission and model access."
+                "Run scripts/check_local_llama.py to verify Ollama or local model availability."
             ),
             "fallback_when_unavailable": True,
         },
@@ -63,8 +64,6 @@ def build_integration_status(
 
 
 def _aws_credentials_status(settings: Settings) -> dict[str, Any]:
-    bedrock_bearer_token = bool(settings.aws_bearer_token_bedrock)
-    bedrock_api_key = bool(settings.bedrock_api_key)
     settings_key_pair = bool(settings.aws_access_key_id and settings.aws_secret_access_key)
     settings_profile = bool(settings.aws_profile)
     env_key_pair = bool(os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY"))
@@ -73,9 +72,7 @@ def _aws_credentials_status(settings: Settings) -> dict[str, Any]:
     container_role = bool(os.getenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") or os.getenv("AWS_CONTAINER_CREDENTIALS_FULL_URI"))
     shared_files = _aws_shared_files_exist()
     configured = (
-        bedrock_bearer_token
-        or bedrock_api_key
-        or settings_key_pair
+        settings_key_pair
         or settings_profile
         or env_key_pair
         or profile
@@ -86,8 +83,6 @@ def _aws_credentials_status(settings: Settings) -> dict[str, Any]:
     sources = [
         name
         for name, enabled in {
-            "aws_bearer_token_bedrock": bedrock_bearer_token,
-            "bedrock_api_key": bedrock_api_key,
             "settings_env_file_key_pair": settings_key_pair,
             "settings_env_file_profile": settings_profile,
             "env_key_pair": env_key_pair,
@@ -101,7 +96,7 @@ def _aws_credentials_status(settings: Settings) -> dict[str, Any]:
     return {
         "configured": configured,
         "detected_sources": sources,
-        "note": "This checks configured credential sources only, not actual IAM permission or Bedrock model access.",
+        "note": "AWS credentials are only needed for direct S3 loading or other AWS resources, not local Llama.",
     }
 
 
@@ -141,8 +136,8 @@ def _integration_gaps(
     model_loaded: bool,
 ) -> list[str]:
     gaps = []
-    if settings.llm_provider == "bedrock" and not aws_credentials_configured:
-        gaps.append("AWS credentials or Bedrock API key are not configured, so Bedrock Llama calls will fall back to deterministic text.")
+    if settings.llm_provider != "local":
+        gaps.append("LLM_PROVIDER is not local; local Llama generation may not be used.")
     if settings.data_source == "local":
         gaps.append("API endpoints currently read local app/data CSV files. Set DATA_SOURCE=s3 to read S3 CSV files.")
     if settings.data_source == "s3" and not s3_configured:

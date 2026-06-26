@@ -85,7 +85,7 @@ class CacheStatusResponse(BaseModel):
     semantic_hits: int
     semantic_misses: int
     semantic_hit_rate: float
-    estimated_bedrock_calls_saved: int
+    estimated_llm_calls_saved: int
 
 
 class IntegrationStatusResponse(BaseModel):

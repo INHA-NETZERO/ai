@@ -1,21 +1,18 @@
 import json
-import os
-from typing import Any
+from functools import lru_cache
+from typing import Any, Literal
 
-from botocore.exceptions import BotoCoreError, ClientError
+import httpx
 
 from app.core.config import Settings
-from app.services.aws_clients import create_aws_client
 
 
-class BedrockLlamaClient:
+class LocalLlamaClient:
     def __init__(self, settings: Settings) -> None:
-        self.model_id = settings.bedrock_model_id
-        self.region_name = settings.aws_region
-        self.bearer_token = settings.aws_bearer_token_bedrock or settings.bedrock_api_key
-        if self.bearer_token:
-            os.environ["AWS_BEARER_TOKEN_BEDROCK"] = self.bearer_token
-        self._client = create_aws_client("bedrock-runtime", settings)
+        self.backend = settings.local_llm_backend
+        self.model = settings.local_llm_model
+        self.base_url = settings.ollama_base_url.rstrip("/")
+        self.hf_model = settings.local_hf_model
 
     def generate_text(
         self,
@@ -24,29 +21,9 @@ class BedrockLlamaClient:
         max_tokens: int = 700,
         temperature: float = 0,
     ) -> str:
-        try:
-            response = self._client.converse(
-                modelId=self.model_id,
-                system=[{"text": system_prompt}],
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [{"text": prompt}],
-                    }
-                ],
-                inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
-            )
-            return response["output"]["message"]["content"][0]["text"]
-        except ClientError as exc:
-            error_code = exc.response.get("Error", {}).get("Code", "")
-            status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-            if status_code in {401, 403} or error_code in {"AccessDeniedException", "UnrecognizedClientException"}:
-                raise
-            return self._generate_with_invoke_model(prompt, system_prompt, max_tokens, temperature)
-        except BotoCoreError:
-            raise
-        except (KeyError, IndexError):
-            return self._generate_with_invoke_model(prompt, system_prompt, max_tokens, temperature)
+        if self.backend == "transformers":
+            return self._generate_with_transformers(prompt, system_prompt, max_tokens, temperature)
+        return self._generate_with_ollama(prompt, system_prompt, max_tokens, temperature)
 
     def generate_json(
         self,
@@ -57,36 +34,72 @@ class BedrockLlamaClient:
     ) -> dict[str, Any]:
         return _loads_json_object(self.generate_text(prompt, system_prompt, max_tokens, temperature))
 
-    def _generate_with_invoke_model(
+    def _generate_with_ollama(
         self,
         prompt: str,
         system_prompt: str,
         max_tokens: int,
         temperature: float,
     ) -> str:
-        if self._client is None:
-            raise RuntimeError("Bedrock runtime client is not initialized")
-        response = self._client.invoke_model(
-            modelId=self.model_id,
-            body=json.dumps(
-                {
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": max_tokens,
+        response = httpx.post(
+            f"{self.base_url}/api/chat",
+            json={
+                "model": self.model,
+                "stream": False,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                "options": {
+                    "num_predict": max_tokens,
                     "temperature": temperature,
                 },
-                ensure_ascii=False,
-            ),
+            },
+            timeout=60.0,
         )
-        payload = json.loads(response["body"].read())
-        content = payload.get("generation") or payload.get("output") or payload.get("content")
-        if isinstance(content, list):
-            content = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in content)
+        response.raise_for_status()
+        payload = response.json()
+        message = payload.get("message", {})
+        content = message.get("content") or payload.get("response")
         if not isinstance(content, str):
-            content = json.dumps(payload, ensure_ascii=False)
+            return json.dumps(payload, ensure_ascii=False)
         return content
+
+    def _generate_with_transformers(
+        self,
+        prompt: str,
+        system_prompt: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        generator = _load_transformers_generator(self.hf_model)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+        output = generator(
+            messages,
+            max_new_tokens=max_tokens,
+            do_sample=temperature > 0,
+            temperature=max(temperature, 0.01),
+            return_full_text=False,
+        )
+        text = output[0].get("generated_text", "")
+        if isinstance(text, list):
+            return str(text[-1].get("content", "")) if text else ""
+        return str(text)
+
+
+@lru_cache(maxsize=1)
+def _load_transformers_generator(model_id: str):
+    try:
+        from transformers import pipeline
+    except ImportError as exc:
+        raise RuntimeError(
+            "LOCAL_LLM_BACKEND=transformers requires transformers/torch. "
+            "Install them or use LOCAL_LLM_BACKEND=ollama."
+        ) from exc
+    return pipeline("text-generation", model=model_id, device_map="auto")
 
 
 def _loads_json_object(text: str) -> dict[str, Any]:
@@ -95,3 +108,6 @@ def _loads_json_object(text: str) -> dict[str, Any]:
     if start == -1 or end == -1 or end <= start:
         raise ValueError("LLM response did not contain a JSON object")
     return json.loads(text[start : end + 1])
+
+
+LocalLlmBackend = Literal["ollama", "transformers"]

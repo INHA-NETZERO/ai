@@ -29,7 +29,7 @@ from app.schemas import (
 )
 from app.services.cache import ExactCache, cache_key
 from app.services.demo_data import build_order_request, closing_cache_payload, load_closing_data
-from app.services.llm import BedrockLlamaClient
+from app.services.llm import LocalLlamaClient
 from app.services.metrics import CacheMetrics
 from app.services.rag import build_order_rag_context
 from app.services.semantic_cache import ChatSemanticCache
@@ -49,14 +49,14 @@ class AppState:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.exact_cache = ExactCache(settings.redis_url)
-        self.llm_client = _build_bedrock_client(settings)
+        self.llm_client = _build_llm_client(settings)
         self.chat_semantic_cache: ChatSemanticCache | None = None
         self.cache_metrics = CacheMetrics()
 
 
-def _build_bedrock_client(settings: Settings) -> BedrockLlamaClient | None:
+def _build_llm_client(settings: Settings) -> LocalLlamaClient | None:
     try:
-        return BedrockLlamaClient(settings)
+        return LocalLlamaClient(settings)
     except Exception:
         return None
 
@@ -95,11 +95,11 @@ def health() -> dict[str, Any]:
         "status": "UP",
         "model": {
             "forecast": MODEL_VERSION,
-            "llm": LLM_MODEL_VERSION if status["llm"]["actual_bedrock_call_ready"] else "fallback_v1",
+            "llm": LLM_MODEL_VERSION if status["llm"]["configured"] else "fallback_v1",
         },
         "llm_provider": settings.llm_provider,
-        "bedrock_model_id": settings.bedrock_model_id,
-        "actual_bedrock_call_ready": status["llm"]["actual_bedrock_call_ready"],
+        "local_llm_backend": settings.local_llm_backend,
+        "local_llm_model": settings.local_llm_model,
         "data_source": status["data_source"]["active"],
         "gaps": status["gaps"],
     }
@@ -147,7 +147,7 @@ def metrics() -> str:
             f"ai_exact_cache_misses {metrics_dump['exact_misses']}",
             f"ai_semantic_cache_hits {metrics_dump['semantic_hits']}",
             f"ai_semantic_cache_misses {metrics_dump['semantic_misses']}",
-            f"ai_estimated_bedrock_calls_saved {metrics_dump['estimated_bedrock_calls_saved']}",
+            f"ai_estimated_llm_calls_saved {metrics_dump['estimated_llm_calls_saved']}",
             "",
         ]
     )
@@ -330,7 +330,7 @@ def _build_chat_answer(
         return state.llm_client.generate_text(
             prompt=prompt,
             system_prompt=(
-                "You are an AWS Bedrock Llama ordering explanation chatbot. "
+                "You are a local Llama ordering explanation chatbot. "
                 "Answer in Korean, cite only the provided POS closing and recommendation context, "
                 "and do not change numeric recommendations."
             ),

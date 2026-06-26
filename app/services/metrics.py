@@ -24,5 +24,5 @@ class CacheMetrics:
             "semantic_hits": self.semantic_hits,
             "semantic_misses": self.semantic_misses,
             "semantic_hit_rate": self.semantic_hit_rate(),
-            "estimated_bedrock_calls_saved": self.semantic_hits,
+            "estimated_llm_calls_saved": self.semantic_hits,
         }
