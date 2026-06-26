@@ -1,33 +1,33 @@
 # Net-Zero AI Server
 
-FastAPI server for POS closing-based demand forecasting, order recommendation, and explanation output.
+POS 하루 마감 데이터를 기반으로 수요를 예측하고, 재고·결품·발주정책을 반영해 발주량을 추천하는 FastAPI 서버입니다. 점주가 추천 결과를 이해할 수 있도록 AWS Bedrock Llama API를 이용한 설명 출력과 챗봇 기능도 제공합니다.
 
-## Stack
+## 기술 스택
 
 - FastAPI: `/forecast`, `/order-recommendation`, `/daily-close`, `/chat`
-- Redis: exact response cache for deterministic closing calculations when `REDIS_URL` is available
-- sqlite-vec semantic cache reserved for the Bedrock Llama chatbot only
-- AWS Bedrock: Meta Llama 3.2 1B Instruct API for recommendation explanations and chatbot answers
-- Deterministic engine: LightGBM forecast, OR-Tools/base-stock order policy
+- Redis: deterministic 계산 결과용 exact cache. `REDIS_URL`이 없거나 Redis가 꺼져 있으면 인메모리 캐시 사용
+- sqlite-vec: Bedrock Llama 챗봇 전용 semantic cache
+- AWS Bedrock: Meta Llama 3.2 1B Instruct API로 발주 추천 설명과 챗봇 답변 생성
+- 예측/발주 엔진: LightGBM 수요 예측, base-stock/OR-Tools 발주 정책
 
-## Bedrock model
+## Bedrock 모델
 
-Default model ID:
+기본 모델 ID:
 
 ```text
 meta.llama3-2-1b-instruct-v1:0
 ```
 
-The AWS Bedrock model card also lists geo inference IDs such as:
+AWS Bedrock 모델 카드에는 지역별 inference profile ID도 있습니다.
 
 ```text
 us.meta.llama3-2-1b-instruct-v1:0
 eu.meta.llama3-2-1b-instruct-v1:0
 ```
 
-Set `BEDROCK_MODEL_ID` if your region or inference profile needs a different ID.
+리전이나 inference profile에 맞춰야 하면 `BEDROCK_MODEL_ID`를 변경하세요.
 
-Required runtime environment for Bedrock calls:
+Bedrock 호출에 필요한 런타임 설정:
 
 ```text
 LLM_PROVIDER=bedrock
@@ -35,9 +35,9 @@ AWS_REGION=us-east-1
 BEDROCK_MODEL_ID=meta.llama3-2-1b-instruct-v1:0
 ```
 
-AWS credentials are resolved through the normal boto3 chain, such as environment variables, AWS CLI profile, or an attached IAM role. The application uses `bedrock-runtime` with Converse API first and falls back to `invoke_model`.
+AWS 인증은 boto3 기본 인증 체인을 따릅니다. 환경변수, AWS CLI profile, IAM Role 등을 사용할 수 있습니다. 서버는 `bedrock-runtime`의 Converse API를 먼저 사용하고, 실패하면 `invoke_model`로 fallback합니다.
 
-## Local setup
+## 로컬 실행
 
 ```bash
 python -m venv .venv
@@ -47,44 +47,54 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
-## Train Local Demand Model
+API 문서:
 
-Put generated inventory-flow CSV files under `app/data/training/`, then train and save the initial LightGBM model:
+```text
+http://127.0.0.1:8000/docs
+```
+
+## 로컬 LightGBM 모델 학습
+
+생성한 inventory-flow CSV 파일들을 아래 폴더에 넣습니다.
+
+```text
+app/data/training/
+```
+
+그다음 학습 스크립트를 실행합니다.
 
 ```bash
 .venv/bin/python scripts/train_lightgbm.py --inventory "app/data/training/*.csv"
 ```
 
-If `app/data/training/` is empty, the script falls back to `app/data/inventory_flow_5days.csv` for a small smoke-test model.
+`app/data/training/`이 비어 있으면 작은 smoke test용으로 `app/data/inventory_flow_5days.csv`를 사용합니다.
 
-Saved artifacts:
+학습 결과물:
 
 ```text
 app/models/demand_lgbm.txt
 app/models/demand_lgbm_metadata.json
 ```
 
-The FastAPI server automatically loads these files when they exist. If they are missing, it falls back to the lightweight in-process forecast path.
+FastAPI 서버는 위 모델 파일이 있으면 자동으로 로드합니다. 모델 파일이 없으면 서버 내부의 가벼운 fallback 예측 경로를 사용합니다.
 
-API docs:
+## 데이터 파일
 
-```text
-http://127.0.0.1:8000/docs
-```
+deterministic API는 별도 요청 payload를 받지 않고, `app/data/` 아래의 POS 마감 CSV 파일을 읽습니다.
 
-## Example
+- `inventory_flow_5days.csv`: 일자별 재고 흐름, 수요, 실판매, 결품, 폐기, 기말재고
+- `item_master.csv`: 품목 ID, 품목명, 단위, 유통기한, ESG 관련 품목 메타데이터
+- `order_policy.csv`: 발주주기, 리드타임, 예측 horizon, 안전재고 방향, MOQ 텍스트
 
-The deterministic APIs do not require request payloads. They read the demo POS closing CSV files from `app/data/`.
+## 빠른 호출 예시
 
-- `inventory_flow_5days.csv`: daily inventory flow, demand, sales, stockout, waste, and ending inventory
-- `item_master.csv`: item IDs, item names, units, shelf life, and ESG-related item metadata
-- `order_policy.csv`: review period, lead time, forecast horizon, safety-stock direction, and MOQ text
+하루 마감 전체 플로우:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/daily-close
 ```
 
-Chatbot explanation endpoint:
+챗봇 설명:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/chat \
@@ -92,13 +102,13 @@ curl -X POST http://127.0.0.1:8000/chat \
   -d '{"question":"샌드위치 발주가 왜 필요한지 알려줘"}'
 ```
 
-## API Specification
+## API 명세
 
 ### `GET /health`
 
-Purpose: service and Bedrock Llama configuration check.
+서버 상태와 Bedrock Llama 설정을 확인합니다.
 
-Response:
+응답 예시:
 
 ```json
 {
@@ -110,9 +120,9 @@ Response:
 
 ### `POST /forecast`
 
-Purpose: run demand forecasting from the local POS closing CSV files. No request body is required.
+로컬 POS 마감 CSV 파일을 기반으로 수요를 예측합니다. 요청 body는 필요 없습니다.
 
-Data source:
+사용 데이터:
 
 ```text
 app/data/inventory_flow_5days.csv
@@ -120,7 +130,7 @@ app/data/item_master.csv
 app/data/order_policy.csv
 ```
 
-Response fields:
+응답 예시:
 
 ```json
 {
@@ -140,17 +150,18 @@ Response fields:
 }
 ```
 
-Notes:
+동작 방식:
 
-- Loads `app/models/demand_lgbm.txt` when a trained model exists.
-- Falls back to the lightweight in-process forecast path when the saved model is missing.
-- Uses exact cache only.
+- `app/models/demand_lgbm.txt`가 있으면 저장된 LightGBM 모델을 로드합니다.
+- 저장된 모델이 없으면 서버 내부 fallback 예측 경로를 사용합니다.
+- 수치 예측 API이므로 exact cache만 사용합니다.
+- LLM은 수요 예측에 사용하지 않습니다.
 
 ### `POST /order-recommendation`
 
-Purpose: calculate order quantities from forecast output, ending inventory, stockout, safety stock, lead time, and MOQ policy. No request body is required.
+예측 수요, 최신 기말재고, 결품, 안전재고, 리드타임, MOQ 정책을 기반으로 품목별 발주량을 계산합니다. 요청 body는 필요 없습니다.
 
-Response fields:
+응답 예시:
 
 ```json
 {
@@ -172,25 +183,26 @@ Response fields:
 }
 ```
 
-Notes:
+동작 방식:
 
-- LLM is not used for numeric order calculation.
-- Uses exact cache only.
+- 기본 방식은 base-stock 정책입니다.
+- LLM은 발주량 계산에 사용하지 않습니다.
+- 수치 계산 API이므로 exact cache만 사용합니다.
 
 ### `POST /daily-close`
 
-Purpose: run the full POS closing flow and generate a store-owner explanation through AWS Bedrock Llama API. No request body is required.
+하루 마감 전체 플로우를 실행하고, AWS Bedrock Llama API로 점주용 설명 문장을 생성합니다. 요청 body는 필요 없습니다.
 
-Flow:
+처리 흐름:
 
 ```text
-CSV closing data
--> saved LightGBM demand forecast
--> base-stock order recommendation
--> Bedrock Llama explanation output
+CSV 마감 데이터
+-> 저장된 LightGBM 수요 예측
+-> base-stock 발주 추천
+-> Bedrock Llama 설명 생성
 ```
 
-Response fields:
+응답 예시:
 
 ```json
 {
@@ -208,17 +220,17 @@ Response fields:
 }
 ```
 
-Notes:
+동작 방식:
 
-- Uses Bedrock Llama only for explanation text.
-- If Bedrock credentials are unavailable, returns a deterministic fallback summary.
-- Uses exact cache only.
+- Bedrock Llama는 설명 문장 생성에만 사용합니다.
+- Bedrock 인증이 없거나 호출에 실패하면 deterministic fallback 요약을 반환합니다.
+- 하루 마감 계산 결과는 exact cache만 사용합니다.
 
 ### `POST /chat`
 
-Purpose: answer store-owner questions about the recommendation using AWS Bedrock Llama API. This endpoint is the only semantic-cache user.
+점주가 발주 추천 결과에 대해 질문하면 AWS Bedrock Llama API로 답변합니다. 이 엔드포인트만 semantic cache를 사용합니다.
 
-Request:
+요청 예시:
 
 ```json
 {
@@ -226,7 +238,7 @@ Request:
 }
 ```
 
-Response:
+응답 예시:
 
 ```json
 {
@@ -239,16 +251,24 @@ Response:
 }
 ```
 
-Notes:
+동작 방식:
 
-- The chatbot explains recommendations; it does not change forecast or order quantities.
-- Semantic cache stores similar chatbot questions and Bedrock Llama answers to reduce repeated AWS calls.
-- Cache namespace includes store ID, business date, and data version.
+- 챗봇은 발주 추천 근거를 설명합니다.
+- 챗봇은 예측값이나 발주량을 변경하지 않습니다.
+- 유사 질문은 semantic cache로 재사용해 Bedrock API 반복 호출을 줄입니다.
+- semantic cache namespace에는 store ID, business date, data version이 포함됩니다.
 
-## Notes
+## 캐시 정책
 
-- Redis is optional. If unavailable, the app uses an in-memory exact cache.
-- `/forecast`, `/order-recommendation`, and `/daily-close` use exact cache only. Semantic cache is intentionally not used for numeric order calculations.
-- `/chat` is the only endpoint that uses semantic cache. It is meant for the AWS Bedrock Llama explanation chatbot, not for changing forecast or order quantities.
-- Bedrock is optional for local development. `app.services.llm.BedrockLlamaClient` calls the configured Llama 3.2 1B model through Bedrock Converse API, with an `invoke_model` fallback.
-- The vector cache uses sqlite-vec when available and keeps chatbot question embeddings, answer responses, and metadata. It can be swapped for pgvector without changing the chat cache interface.
+- `/forecast`, `/order-recommendation`, `/daily-close`: exact cache만 사용
+- `/chat`: semantic cache 사용
+
+수요 예측과 발주량 계산은 숫자 정확도가 중요하므로 semantic cache를 사용하지 않습니다. semantic cache는 점주 챗봇의 유사 질문 답변 재사용에만 사용합니다.
+
+Redis가 없으면 exact cache는 인메모리로 동작합니다. semantic cache는 sqlite-vec를 우선 사용하고, 환경에 따라 일반 SQLite fallback 경로를 사용합니다.
+
+## 테스트
+
+```bash
+.venv/bin/python -m pytest
+```
