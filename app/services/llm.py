@@ -1,6 +1,8 @@
 import json
 from typing import Any
+from urllib.parse import quote
 
+import httpx
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import Settings
@@ -10,7 +12,9 @@ from app.services.aws_clients import create_aws_client
 class BedrockLlamaClient:
     def __init__(self, settings: Settings) -> None:
         self.model_id = settings.bedrock_model_id
-        self._client = create_aws_client("bedrock-runtime", settings)
+        self.region_name = settings.aws_region
+        self.api_key = settings.bedrock_api_key
+        self._client = None if self.api_key else create_aws_client("bedrock-runtime", settings)
 
     def generate_text(
         self,
@@ -19,7 +23,12 @@ class BedrockLlamaClient:
         max_tokens: int = 700,
         temperature: float = 0,
     ) -> str:
+        if self.api_key:
+            return self._generate_with_api_key(prompt, system_prompt, max_tokens, temperature)
+
         try:
+            if self._client is None:
+                raise RuntimeError("Bedrock runtime client is not initialized")
             response = self._client.converse(
                 modelId=self.model_id,
                 system=[{"text": system_prompt}],
@@ -51,6 +60,8 @@ class BedrockLlamaClient:
         max_tokens: int,
         temperature: float,
     ) -> str:
+        if self._client is None:
+            raise RuntimeError("Bedrock runtime client is not initialized")
         response = self._client.invoke_model(
             modelId=self.model_id,
             body=json.dumps(
@@ -72,6 +83,37 @@ class BedrockLlamaClient:
         if not isinstance(content, str):
             content = json.dumps(payload, ensure_ascii=False)
         return content
+
+    def _generate_with_api_key(
+        self,
+        prompt: str,
+        system_prompt: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        encoded_model_id = quote(self.model_id, safe="")
+        url = f"https://bedrock-runtime.{self.region_name}.amazonaws.com/model/{encoded_model_id}/converse"
+        response = httpx.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "system": [{"text": system_prompt}],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"text": prompt}],
+                    }
+                ],
+                "inferenceConfig": {"maxTokens": max_tokens, "temperature": temperature},
+            },
+            timeout=20.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload["output"]["message"]["content"][0]["text"]
 
 
 def _loads_json_object(text: str) -> dict[str, Any]:

@@ -64,6 +64,7 @@ def build_integration_status(
 
 
 def _aws_credentials_status(settings: Settings) -> dict[str, Any]:
+    bedrock_api_key = bool(settings.bedrock_api_key)
     settings_key_pair = bool(settings.aws_access_key_id and settings.aws_secret_access_key)
     settings_profile = bool(settings.aws_profile)
     env_key_pair = bool(os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY"))
@@ -71,10 +72,11 @@ def _aws_credentials_status(settings: Settings) -> dict[str, Any]:
     web_identity = bool(os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE") and os.getenv("AWS_ROLE_ARN"))
     container_role = bool(os.getenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") or os.getenv("AWS_CONTAINER_CREDENTIALS_FULL_URI"))
     shared_files = _aws_shared_files_exist()
-    configured = settings_key_pair or settings_profile or env_key_pair or profile or web_identity or container_role or shared_files
+    configured = bedrock_api_key or settings_key_pair or settings_profile or env_key_pair or profile or web_identity or container_role or shared_files
     sources = [
         name
         for name, enabled in {
+            "bedrock_api_key": bedrock_api_key,
             "settings_env_file_key_pair": settings_key_pair,
             "settings_env_file_profile": settings_profile,
             "env_key_pair": env_key_pair,

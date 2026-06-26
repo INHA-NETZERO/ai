@@ -334,3 +334,37 @@ def test_aws_session_uses_env_file_credentials(monkeypatch) -> None:
         "aws_secret_access_key": "secret",
         "aws_session_token": "token",
     }
+
+
+def test_bedrock_client_uses_api_key_bearer_auth(monkeypatch) -> None:
+    from app.services.llm import BedrockLlamaClient
+
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"output": {"message": {"content": [{"text": "ok"}]}}}
+
+    def fake_post(url, headers, json, timeout):
+        captured.update({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.llm.httpx.post", fake_post)
+    client = BedrockLlamaClient(
+        Settings(
+            aws_region="us-east-1",
+            bedrock_model_id="meta.llama3-2-1b-instruct-v1:0",
+            bedrock_api_key="secret-api-key",
+        )
+    )
+
+    assert client.generate_text("hello", max_tokens=10) == "ok"
+    assert captured["url"] == (
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+        "meta.llama3-2-1b-instruct-v1%3A0/converse"
+    )
+    assert captured["headers"]["Authorization"] == "Bearer secret-api-key"
+    assert captured["json"]["inferenceConfig"]["maxTokens"] == 10

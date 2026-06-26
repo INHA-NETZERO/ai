@@ -11,6 +11,8 @@ from app.services.llm import BedrockLlamaClient
 
 def main() -> None:
     settings = get_settings()
+    auth_mode = "bedrock_api_key" if settings.bedrock_api_key else "aws_credentials"
+    print(f"auth_mode={auth_mode}")
     client = BedrockLlamaClient(settings)
     answer = client.generate_text(
         prompt="한국어로 'Bedrock 연결 확인 완료'라고만 답해줘.",

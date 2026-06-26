@@ -53,11 +53,10 @@ Bedrock 호출에 필요한 런타임 설정:
 LLM_PROVIDER=bedrock
 AWS_REGION=us-east-1
 BEDROCK_MODEL_ID=meta.llama3-2-1b-instruct-v1:0
-AWS_ACCESS_KEY_ID=<받은 Bedrock IAM access key>
-AWS_SECRET_ACCESS_KEY=<받은 Bedrock IAM secret key>
+BEDROCK_API_KEY=<받은 bedrock-api-key-... 값>
 ```
 
-AWS 인증은 boto3 기본 인증 체인을 따릅니다. 환경변수, AWS CLI profile, IAM Role 등을 사용할 수 있습니다. 서버는 `bedrock-runtime`의 Converse API를 먼저 사용하고, 실패하면 `invoke_model`로 fallback합니다.
+Bedrock API key를 받은 경우 `BEDROCK_API_KEY` 하나만 넣으면 됩니다. IAM access key pair를 받은 경우에는 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`를 대신 사용할 수 있습니다. 서버는 `BEDROCK_API_KEY`가 있으면 Bearer 방식으로 Bedrock Runtime Converse API를 호출하고, 없으면 boto3 기본 인증 체인을 사용합니다.
 
 주의: AWS key/profile/IAM Role이 없으면 Bedrock API 호출은 성공하지 않습니다. 이 경우 서버는 죽지 않고 fallback 요약문을 반환하지만, 그것은 Llama가 생성한 답변이 아닙니다.
 
