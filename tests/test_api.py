@@ -409,6 +409,21 @@ def test_local_llama_client_uses_ollama_chat(monkeypatch) -> None:
     assert captured["json"]["options"]["num_predict"] == 10
 
 
+def test_local_llama_client_requires_gguf_for_llama_cpp() -> None:
+    from app.services.llm import LocalLlamaClient
+
+    client = LocalLlamaClient(
+        Settings(
+            _env_file=None,
+            local_llm_backend="llama_cpp",
+            local_gguf_model_path=None,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="LOCAL_GGUF_MODEL_PATH"):
+        client.generate_text("hello")
+
+
 def test_check_s3_direct_mode_requires_bucket(monkeypatch) -> None:
     from scripts import check_s3
 

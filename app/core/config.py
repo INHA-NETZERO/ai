@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     local_llm_backend: str = "ollama"
     local_llm_model: str = "llama3.2:1b"
     local_hf_model: str = "meta-llama/Llama-3.2-1B-Instruct"
+    local_gguf_model_path: str | None = None
     ollama_base_url: str = "http://localhost:11434"
     aws_region: str = "us-east-1"
     aws_profile: str | None = None

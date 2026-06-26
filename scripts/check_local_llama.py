@@ -14,6 +14,8 @@ def main() -> None:
     print(f"provider={settings.llm_provider}")
     print(f"backend={settings.local_llm_backend}")
     print(f"model={settings.local_llm_model}")
+    print(f"hf_model={settings.local_hf_model}")
+    print(f"gguf_model_path={settings.local_gguf_model_path or ''}")
     print(f"ollama_base_url={settings.ollama_base_url}")
     client = LocalLlamaClient(settings)
     answer = client.generate_text(
@@ -32,5 +34,7 @@ if __name__ == "__main__":
         raise SystemExit(
             "Local Llama check failed. "
             "If using Ollama, run `ollama pull llama3.2:1b` and `ollama serve` first. "
+            "If using llama.cpp, set LOCAL_LLM_BACKEND=llama_cpp and LOCAL_GGUF_MODEL_PATH. "
+            "If using transformers, install transformers/torch and set LOCAL_LLM_BACKEND=transformers. "
             f"Error: {exc}"
         ) from exc

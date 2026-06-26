@@ -29,6 +29,9 @@ curl -s http://127.0.0.1:8000/integration-status | python -m json.tool
 
 ## 로컬 Llama 설정
 
+`/daily-close`, `/chat`, `/v1/generate`는 모두 `app/services/llm.py`의 `LocalLlamaClient`를 사용합니다.
+즉, LLM 설명과 챗봇은 같은 Llama 호출 코드 경로를 탑니다.
+
 기본 방식은 Ollama입니다.
 
 ```bash
@@ -53,6 +56,13 @@ OLLAMA_BASE_URL=http://localhost:11434
 
 Hugging Face Transformers로 직접 로드하려면 `LOCAL_LLM_BACKEND=transformers`,
 `LOCAL_HF_MODEL=meta-llama/Llama-3.2-1B-Instruct`를 사용합니다. 이 경우 별도 모델 접근 권한과 로컬 추론 의존성이 필요합니다.
+
+GGUF 모델 파일을 직접 로드하려면 `llama-cpp-python` 설치 후 아래처럼 설정합니다.
+
+```text
+LOCAL_LLM_BACKEND=llama_cpp
+LOCAL_GGUF_MODEL_PATH=/absolute/path/to/llama-3.2-1b-instruct.gguf
+```
 
 ## Redis 설정
 
