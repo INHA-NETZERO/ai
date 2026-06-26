@@ -22,13 +22,14 @@ def has_aws_credential_settings() -> bool:
 
 def main() -> None:
     settings = get_settings()
-    auth_mode = "bedrock_api_key" if settings.bedrock_api_key else "aws_credentials"
+    bearer_token = settings.aws_bearer_token_bedrock or settings.bedrock_api_key
+    auth_mode = "aws_bearer_token_bedrock" if bearer_token else "aws_credentials"
     print(f"auth_mode={auth_mode}")
 
-    if not settings.bedrock_api_key and not has_aws_credential_settings():
+    if not bearer_token and not has_aws_credential_settings():
         raise SystemExit(
             "No Bedrock credentials found. "
-            "Put BEDROCK_API_KEY=... in .env, not .env.example."
+            "Put AWS_BEARER_TOKEN_BEDROCK=... in .env, not .env.example."
         )
 
     client = BedrockLlamaClient(settings)
@@ -54,7 +55,9 @@ def main() -> None:
             f"({settings.aws_region})."
         ) from exc
     except NoCredentialsError as exc:
-        raise SystemExit("AWS credentials were not found. Put BEDROCK_API_KEY=... in .env or configure AWS credentials.") from exc
+        raise SystemExit(
+            "AWS credentials were not found. Put AWS_BEARER_TOKEN_BEDROCK=... in .env or configure AWS credentials."
+        ) from exc
     except (BotoCoreError, ClientError) as exc:
         raise SystemExit(f"AWS Bedrock SDK call failed: {exc}") from exc
     print(answer)

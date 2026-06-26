@@ -13,8 +13,8 @@ class BedrockLlamaClient:
     def __init__(self, settings: Settings) -> None:
         self.model_id = settings.bedrock_model_id
         self.region_name = settings.aws_region
-        self.api_key = settings.bedrock_api_key
-        self._client = None if self.api_key else create_aws_client("bedrock-runtime", settings)
+        self.bearer_token = settings.aws_bearer_token_bedrock or settings.bedrock_api_key
+        self._client = None if self.bearer_token else create_aws_client("bedrock-runtime", settings)
 
     def generate_text(
         self,
@@ -23,7 +23,7 @@ class BedrockLlamaClient:
         max_tokens: int = 700,
         temperature: float = 0,
     ) -> str:
-        if self.api_key:
+        if self.bearer_token:
             return self._generate_with_api_key(prompt, system_prompt, max_tokens, temperature)
 
         try:
@@ -96,7 +96,7 @@ class BedrockLlamaClient:
         response = httpx.post(
             url,
             headers={
-                "Authorization": f"Bearer {self.api_key}",
+                "Authorization": f"Bearer {self.bearer_token}",
                 "Content-Type": "application/json",
             },
             json={
