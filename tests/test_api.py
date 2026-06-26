@@ -55,8 +55,7 @@ def test_cache_status_tracks_exact_cache() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["exact_cache_backend"] in {"memory", "redis", "elasticache_redis"}
-    assert body["elasticache_compatible"] is True
+    assert body["exact_cache_backend"] in {"memory", "redis"}
     assert body["exact_hits"] >= 1
 
 

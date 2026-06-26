@@ -14,13 +14,11 @@ def build_integration_status(
     aws_credentials = _aws_credentials_status(settings)
     model = _model_status()
     s3_configured = bool(settings.s3_bucket)
-    cloudwatch_configured = bool(settings.elasticache_replication_group_id or settings.elasticache_cache_cluster_id)
     gaps = _integration_gaps(
         settings=settings,
         aws_credentials_configured=aws_credentials["configured"],
         exact_cache_backend=exact_cache_backend,
         s3_configured=s3_configured,
-        cloudwatch_configured=cloudwatch_configured,
         model_loaded=model["available"],
     )
     return {
@@ -57,9 +55,7 @@ def build_integration_status(
         "cache": {
             "exact_cache_backend": exact_cache_backend,
             "semantic_cache_backend": semantic_cache_backend,
-            "elasticache_redis_active": exact_cache_backend == "elasticache_redis",
-            "cloudwatch_elasticache_metrics_configured": cloudwatch_configured,
-            "cloudwatch_metrics_require_aws_credentials": cloudwatch_configured,
+            "redis_active": exact_cache_backend == "redis",
         },
         "model": model,
         "gaps": gaps,
@@ -142,7 +138,6 @@ def _integration_gaps(
     aws_credentials_configured: bool,
     exact_cache_backend: str,
     s3_configured: bool,
-    cloudwatch_configured: bool,
     model_loaded: bool,
 ) -> list[str]:
     gaps = []
@@ -155,9 +150,7 @@ def _integration_gaps(
     if settings.data_source == "s3" and not aws_credentials_configured:
         gaps.append("DATA_SOURCE=s3 is active but AWS credentials are not configured.")
     if exact_cache_backend == "memory":
-        gaps.append("Exact cache is using process memory; Redis/ElastiCache is not active.")
-    if cloudwatch_configured and not aws_credentials_configured:
-        gaps.append("ElastiCache CloudWatch metrics are configured but cannot be fetched without AWS credentials.")
+        gaps.append("Exact cache is using process memory; Redis is not active.")
     if not model_loaded:
         gaps.append("Saved LightGBM model is unavailable or metadata schema does not match; forecast falls back locally.")
     return gaps

@@ -86,8 +86,6 @@ class CacheStatusResponse(BaseModel):
     semantic_misses: int
     semantic_hit_rate: float
     estimated_bedrock_calls_saved: int
-    elasticache_compatible: bool = True
-    aws_elasticache: dict[str, Any] | None = None
 
 
 class IntegrationStatusResponse(BaseModel):
