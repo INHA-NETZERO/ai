@@ -36,7 +36,7 @@ from app.services.semantic_cache import ChatSemanticCache
 
 MODEL_VERSION = "lgbm_global_v1"
 BASELINE_MODEL_VERSION = "baseline_v1"
-LLM_MODEL_VERSION = "bedrock-llama3.2-1b"
+LLM_MODEL_VERSION = "bedrock-llama3.2-1b-converse"
 SALES_CSV_COLUMNS_V1 = [
     "날짜",
     "요일",

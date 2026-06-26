@@ -1,8 +1,9 @@
-from fastapi.testclient import TestClient
+import os
 from io import BytesIO
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import app
@@ -380,18 +381,13 @@ def test_bedrock_client_uses_bedrock_bearer_token(monkeypatch) -> None:
 
     captured = {}
 
-    class FakeResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self):
+    class FakeBedrockClient:
+        def converse(self, **kwargs):
+            captured.update(kwargs)
             return {"output": {"message": {"content": [{"text": "ok"}]}}}
 
-    def fake_post(url, headers, json, timeout):
-        captured.update({"url": url, "headers": headers, "json": json, "timeout": timeout})
-        return FakeResponse()
-
-    monkeypatch.setattr("app.services.llm.httpx.post", fake_post)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr("app.services.llm.create_aws_client", lambda service_name, settings: FakeBedrockClient())
     client = BedrockLlamaClient(
         Settings(
             _env_file=None,
@@ -402,31 +398,22 @@ def test_bedrock_client_uses_bedrock_bearer_token(monkeypatch) -> None:
     )
 
     assert client.generate_text("hello", max_tokens=10) == "ok"
-    assert captured["url"] == (
-        "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
-        "meta.llama3-2-1b-instruct-v1%3A0/converse"
-    )
-    assert captured["headers"]["Authorization"] == "Bearer secret-bearer-token"
-    assert captured["json"]["inferenceConfig"]["maxTokens"] == 10
+    assert captured["modelId"] == "meta.llama3-2-1b-instruct-v1:0"
+    assert captured["messages"][0]["content"][0]["text"] == "hello"
+    assert captured["inferenceConfig"]["maxTokens"] == 10
+    assert captured["inferenceConfig"]["temperature"] == 0
+    assert os.environ["AWS_BEARER_TOKEN_BEDROCK"] == "secret-bearer-token"
 
 
 def test_bedrock_client_keeps_legacy_api_key_fallback(monkeypatch) -> None:
     from app.services.llm import BedrockLlamaClient
 
-    captured = {}
-
-    class FakeResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self):
+    class FakeBedrockClient:
+        def converse(self, **kwargs):
             return {"output": {"message": {"content": [{"text": "ok"}]}}}
 
-    def fake_post(url, headers, json, timeout):
-        captured.update({"headers": headers})
-        return FakeResponse()
-
-    monkeypatch.setattr("app.services.llm.httpx.post", fake_post)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr("app.services.llm.create_aws_client", lambda service_name, settings: FakeBedrockClient())
     client = BedrockLlamaClient(
         Settings(
             _env_file=None,
@@ -435,7 +422,7 @@ def test_bedrock_client_keeps_legacy_api_key_fallback(monkeypatch) -> None:
     )
 
     assert client.generate_text("hello", max_tokens=10) == "ok"
-    assert captured["headers"]["Authorization"] == "Bearer legacy-secret"
+    assert os.environ["AWS_BEARER_TOKEN_BEDROCK"] == "legacy-secret"
 
 
 def test_check_s3_direct_mode_requires_bucket(monkeypatch) -> None:

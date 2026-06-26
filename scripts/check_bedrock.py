@@ -2,7 +2,6 @@
 import sys
 from pathlib import Path
 
-import httpx
 from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -40,25 +39,21 @@ def main() -> None:
             max_tokens=30,
             temperature=0,
         )
-    except httpx.HTTPStatusError as exc:
-        status_code = exc.response.status_code
-        if status_code in {401, 403}:
+    except ClientError as exc:
+        status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        error_code = exc.response.get("Error", {}).get("Code", "Unknown")
+        if status_code in {401, 403} or error_code in {"AccessDeniedException", "UnrecognizedClientException"}:
             raise SystemExit(
-                f"Bedrock reached AWS, but authorization failed ({status_code}). "
+                f"Bedrock reached AWS, but authorization failed ({status_code or error_code}). "
                 "Check API key validity, Bedrock model access, region, and permission for "
                 f"{settings.bedrock_model_id} in {settings.aws_region}."
             ) from exc
-        raise SystemExit(f"Bedrock HTTP request failed ({status_code}). Check AWS Bedrock status and request settings.") from exc
-    except httpx.HTTPError as exc:
-        raise SystemExit(
-            "Could not reach Bedrock endpoint. Check network/VPN/DNS and AWS region "
-            f"({settings.aws_region})."
-        ) from exc
+        raise SystemExit(f"AWS Bedrock SDK call failed: {error_code}: {exc}") from exc
     except NoCredentialsError as exc:
         raise SystemExit(
             "AWS credentials were not found. Put AWS_BEARER_TOKEN_BEDROCK=... in .env or configure AWS credentials."
         ) from exc
-    except (BotoCoreError, ClientError) as exc:
+    except BotoCoreError as exc:
         raise SystemExit(f"AWS Bedrock SDK call failed: {exc}") from exc
     print(answer)
 

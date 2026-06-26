@@ -1,8 +1,7 @@
 import json
+import os
 from typing import Any
-from urllib.parse import quote
 
-import httpx
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import Settings
@@ -14,7 +13,9 @@ class BedrockLlamaClient:
         self.model_id = settings.bedrock_model_id
         self.region_name = settings.aws_region
         self.bearer_token = settings.aws_bearer_token_bedrock or settings.bedrock_api_key
-        self._client = None if self.bearer_token else create_aws_client("bedrock-runtime", settings)
+        if self.bearer_token:
+            os.environ["AWS_BEARER_TOKEN_BEDROCK"] = self.bearer_token
+        self._client = create_aws_client("bedrock-runtime", settings)
 
     def generate_text(
         self,
@@ -23,12 +24,7 @@ class BedrockLlamaClient:
         max_tokens: int = 700,
         temperature: float = 0,
     ) -> str:
-        if self.bearer_token:
-            return self._generate_with_api_key(prompt, system_prompt, max_tokens, temperature)
-
         try:
-            if self._client is None:
-                raise RuntimeError("Bedrock runtime client is not initialized")
             response = self._client.converse(
                 modelId=self.model_id,
                 system=[{"text": system_prompt}],
@@ -41,7 +37,15 @@ class BedrockLlamaClient:
                 inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
             )
             return response["output"]["message"]["content"][0]["text"]
-        except (BotoCoreError, ClientError, KeyError, IndexError):
+        except ClientError as exc:
+            error_code = exc.response.get("Error", {}).get("Code", "")
+            status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if status_code in {401, 403} or error_code in {"AccessDeniedException", "UnrecognizedClientException"}:
+                raise
+            return self._generate_with_invoke_model(prompt, system_prompt, max_tokens, temperature)
+        except BotoCoreError:
+            raise
+        except (KeyError, IndexError):
             return self._generate_with_invoke_model(prompt, system_prompt, max_tokens, temperature)
 
     def generate_json(
@@ -83,37 +87,6 @@ class BedrockLlamaClient:
         if not isinstance(content, str):
             content = json.dumps(payload, ensure_ascii=False)
         return content
-
-    def _generate_with_api_key(
-        self,
-        prompt: str,
-        system_prompt: str,
-        max_tokens: int,
-        temperature: float,
-    ) -> str:
-        encoded_model_id = quote(self.model_id, safe="")
-        url = f"https://bedrock-runtime.{self.region_name}.amazonaws.com/model/{encoded_model_id}/converse"
-        response = httpx.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {self.bearer_token}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "system": [{"text": system_prompt}],
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [{"text": prompt}],
-                    }
-                ],
-                "inferenceConfig": {"maxTokens": max_tokens, "temperature": temperature},
-            },
-            timeout=20.0,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        return payload["output"]["message"]["content"][0]["text"]
 
 
 def _loads_json_object(text: str) -> dict[str, Any]:

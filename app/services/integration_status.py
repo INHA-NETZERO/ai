@@ -147,7 +147,7 @@ def _integration_gaps(
 ) -> list[str]:
     gaps = []
     if settings.llm_provider == "bedrock" and not aws_credentials_configured:
-        gaps.append("AWS credentials are not configured, so Bedrock Llama calls will fall back to deterministic text.")
+        gaps.append("AWS credentials or Bedrock API key are not configured, so Bedrock Llama calls will fall back to deterministic text.")
     if settings.data_source == "local":
         gaps.append("API endpoints currently read local app/data CSV files. Set DATA_SOURCE=s3 to read S3 CSV files.")
     if settings.data_source == "s3" and not s3_configured:
