@@ -156,6 +156,20 @@ def _phrase_boost(query_text: str, content: str) -> int:
         "p90",
         "lightgbm",
         "캐시",
+        "기존",
+        "비교",
+        "현재재고",
+        "재고",
+        "안전재고",
+        "기준재고",
+        "baseStock",
+        "baseStockLevel",
+        "forecastTotal",
+        "packSize",
+        "포장",
+        "리드타임",
+        "답변",
+        "근거",
     ]:
         if phrase in normalized_query and phrase in normalized_content:
             score += 2

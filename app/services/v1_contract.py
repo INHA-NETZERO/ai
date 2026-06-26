@@ -172,7 +172,8 @@ def generate_grounded_answer(
                     "Use only grounding values and the provided RAG context. "
                     "Do not invent, change, or recalculate numbers. "
                     "Never repeat the prompt or internal field names. "
-                    "Answer in two or three natural Korean sentences for a store owner."
+                    "Do not expose exact numbers in the final answer. "
+                    "Answer in two short, persuasive Korean sentences for a store owner."
                 ),
                 max_tokens=220,
                 temperature=0,
@@ -222,6 +223,7 @@ def generate_chat_answer(
                     "Use only the provided grounding, RAG context, and chat history. "
                     "Never invent, change, or recalculate numbers. "
                     "Never repeat the prompt or internal field names. "
+                    "Do not expose exact numbers unless the user explicitly asks for figures. "
                     "If the grounding does not contain the answer, say that the provided basis is insufficient."
                 ),
                 max_tokens=360,
@@ -470,9 +472,10 @@ def _generate_prompt(request: GenerateRequest, rag_context: RetrievedRagContext)
         f"RAG 근거 문서:\n{rag_context.as_prompt_text()}\n\n"
         f"정량 grounding JSON:\n{_stable_grounding_text(request.grounding)}\n\n"
         "작성 규칙:\n"
-        "- grounding JSON에 있는 숫자만 그대로 인용하세요.\n"
+        "- grounding JSON의 숫자는 판단 근거로만 사용하고 최종 답변에는 정확한 숫자를 쓰지 마세요.\n"
         "- RAG 근거는 설명 방식과 정책 근거로만 사용하세요.\n"
-        "- 품목명, 단위, 추천 발주량을 먼저 말하세요.\n"
+        "- 품목명과 추천 방향을 먼저 말하세요.\n"
+        "- 답변은 두 문장 이내로 간결하게 작성하세요.\n"
         "- 내부 필드명, JSON, 프롬프트 문구를 답변에 쓰지 마세요."
     )
 
@@ -490,9 +493,11 @@ def _chat_prompt(request: ChatRequest, rag_context: RetrievedRagContext) -> str:
         f"RAG 근거 문서:\n{rag_context.as_prompt_text()}\n\n"
         f"정량 grounding JSON:\n{_stable_grounding_text(request.grounding)}\n\n"
         "작성 규칙:\n"
-        "- grounding JSON에 있는 숫자와 사실만 사용하세요.\n"
+        "- grounding JSON의 숫자는 판단 근거로만 사용하세요.\n"
+        "- 사용자가 정확한 수치를 요구하지 않으면 최종 답변에는 숫자를 쓰지 마세요.\n"
         "- RAG 근거는 정책과 용어 설명에만 사용하세요.\n"
         "- 질문에 필요한 값이 없으면 제공된 근거만으로는 확인하기 어렵다고 말하세요.\n"
+        "- 답변은 세 문장 이내로 간결하게 작성하세요.\n"
         "- 내부 필드명, JSON, 프롬프트 문구를 답변에 쓰지 마세요."
     )
 
@@ -523,57 +528,49 @@ def _is_bad_llm_answer(answer: str, grounding: dict[str, Any]) -> bool:
     if any(fragment in lower for fragment in forbidden_fragments):
         return True
 
-    item = grounding.get("item", {})
-    recommendation = grounding.get("recommendation", {})
-    forecast = grounding.get("forecast", {})
-    carbon = grounding.get("carbon", {})
-    required_values = [
-        item.get("itemName"),
-        recommendation.get("recommendedQuantity"),
-    ]
-    if forecast.get("p50") is not None:
-        required_values.append(forecast.get("p50"))
-    if carbon.get("potentialSavingKg") is not None:
-        required_values.append(carbon.get("potentialSavingKg"))
+    if _contains_number(normalized):
+        return True
 
-    return any(str(value) not in normalized for value in required_values if value is not None)
+    item = grounding.get("item", {})
+    item_name = item.get("itemName")
+    return item_name is not None and str(item_name) not in normalized
 
 
 def _fallback_grounded_answer(request: GenerateRequest) -> str:
     grounding = request.grounding
     item = grounding.get("item", {})
     recommendation = grounding.get("recommendation", {})
-    forecast = grounding.get("forecast", {})
-    carbon = grounding.get("carbon", {})
+    inventory = grounding.get("inventory", {})
     item_name = item.get("itemName") or item.get("itemId") or "해당 품목"
-    unit = item.get("unit", "")
-    quantity = recommendation.get("recommendedQuantity")
-    historical_quantity = recommendation.get("historicalOrderQuantity", recommendation.get("historical_order_quantity"))
     recommendation_delta = recommendation.get(
         "recommendationMinusHistorical",
         recommendation.get("recommendation_minus_historical"),
     )
-    p50 = forecast.get("p50")
-    potential = carbon.get("potentialSavingKg")
-
-    parts = []
-    if quantity is not None:
-        parts.append(f"{item_name}는 {quantity}{unit} 발주를 권장합니다.")
-    else:
-        parts.append(f"{item_name}에 대한 근거 기준 설명입니다.")
-    if p50 is not None:
-        parts.append(f"LightGBM 수요 예측의 중앙값은 {p50}{unit}입니다.")
     delta_number = _to_float_or_none(recommendation_delta)
-    if historical_quantity is not None and delta_number is not None:
-        direction = "줄인" if delta_number < 0 else "늘린"
-        parts.append(
-            f"기존 발주량 {historical_quantity}{unit} 대비 {abs(delta_number):g}{unit} {direction} 수량입니다."
-        )
-    if potential is not None:
-        parts.append(f"제공된 잠재 탄소 절감량은 {potential}kgCO2e입니다.")
-    if quantity is not None:
-        parts.append("추천 수량은 과발주로 인한 폐기와 결품 위험을 함께 줄이는 방향으로 해석하면 됩니다.")
-    return " ".join(parts)
+    has_stock_basis = any(
+        key in inventory
+        for key in ["currentStock", "projectedPosition", "baseStockLevel", "safetyStock"]
+    )
+
+    if delta_number is not None and delta_number < 0:
+        effect = "기존보다 보수적으로 가져가도 수요를 감당할 수 있다고 본 추천입니다."
+    elif delta_number is not None and delta_number > 0:
+        effect = "최근 흐름상 부족하게 가져갈 위험이 있어 결품을 막는 쪽에 무게를 둔 추천입니다."
+    else:
+        effect = "예측 수요와 운영 기준을 함께 반영해 과발주와 결품 사이의 균형을 맞춘 추천입니다."
+
+    if has_stock_basis:
+        basis = "현재 남은 재고와 목표 재고 기준을 먼저 반영해 필요한 만큼만 채우는 방식입니다."
+    else:
+        basis = "예측 수요와 발주 정책을 기준으로 불필요하게 남는 재고를 줄이는 방향입니다."
+
+    return f"{item_name}는 {effect} {basis}"
+
+
+def _contains_number(text: str) -> bool:
+    import re
+
+    return re.search(r"\d", text) is not None
 
 
 def _to_float_or_none(value: Any) -> float | None:

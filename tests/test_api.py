@@ -313,7 +313,8 @@ def test_v1_generate_injects_rag_context_into_llm_prompt() -> None:
 
     assert response.cache_hit is False
     assert "RAG 근거 문서" in fake_llm.prompt
-    assert "order_recommendation.md" in fake_llm.prompt
+    assert "RAG-1" in fake_llm.prompt
+    assert "추천 방향" in fake_llm.prompt
     assert "LightGBM" in fake_llm.prompt
 
 
