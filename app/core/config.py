@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     app_name: str = "Net-Zero AI Server"
     environment: str = "local"
     redis_url: str | None = None
+    llm_provider: str = "bedrock"
     aws_region: str = "us-east-1"
     bedrock_model_id: str = "meta.llama3-2-1b-instruct-v1:0"
     vector_db_path: Path = Path(".cache/vector_cache.sqlite3")

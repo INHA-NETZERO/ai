@@ -50,7 +50,11 @@ app = FastAPI(title=get_settings().app_name, version="0.1.0", lifespan=lifespan)
 @app.get("/health")
 def health() -> dict[str, str]:
     settings = get_settings()
-    return {"status": "ok", "bedrock_model_id": settings.bedrock_model_id}
+    return {
+        "status": "ok",
+        "llm_provider": settings.llm_provider,
+        "bedrock_model_id": settings.bedrock_model_id,
+    }
 
 
 @app.post("/forecast", response_model=ForecastResponse)
@@ -178,7 +182,11 @@ def _build_chat_answer(data: dict[str, Any], order_response: OrderRecommendation
     try:
         return state.llm_client.generate_text(
             prompt=prompt,
-            system_prompt="You are a low-power store ordering explanation chatbot. Answer in Korean.",
+            system_prompt=(
+                "You are an AWS Bedrock Llama ordering explanation chatbot. "
+                "Answer in Korean, cite only the provided POS closing and recommendation context, "
+                "and do not change numeric recommendations."
+            ),
             max_tokens=400,
             temperature=0,
         )
