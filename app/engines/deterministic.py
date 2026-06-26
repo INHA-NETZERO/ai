@@ -1,15 +1,10 @@
 from collections import defaultdict
 from datetime import date, timedelta
-import json
 from math import ceil
-from pathlib import Path
 
 import numpy as np
 
 from app.schemas import (
-    CarbonEstimateRequest,
-    CarbonEstimateResponse,
-    CarbonItemEstimate,
     ForecastPoint,
     ForecastRequest,
     ForecastResponse,
@@ -18,19 +13,6 @@ from app.schemas import (
     OrderRecommendationResponse,
     RecommendedOrder,
 )
-
-
-CARBON_LOOKUP_PATH = Path(__file__).resolve().parents[1] / "data" / "carbon_lookup.json"
-
-
-def _load_carbon_lookup() -> dict[str, dict[str, float] | str]:
-    with CARBON_LOOKUP_PATH.open(encoding="utf-8") as lookup_file:
-        return json.load(lookup_file)
-
-
-CARBON_LOOKUP = _load_carbon_lookup()
-MATERIAL_FACTORS_KG_CO2E_PER_KG = CARBON_LOOKUP["material_factors_kg_co2e_per_kg"]
-TRANSPORT_FACTORS_KG_CO2E_PER_TON_KM = CARBON_LOOKUP["transport_factors_kg_co2e_per_ton_km"]
 
 
 def forecast_demand(request: ForecastRequest) -> ForecastResponse:
@@ -193,29 +175,3 @@ def _ortools_base_stock_recommendations(
             )
         )
     return recommendations
-
-
-def estimate_carbon(request: CarbonEstimateRequest) -> CarbonEstimateResponse:
-    estimates: list[CarbonItemEstimate] = []
-    for item in request.items:
-        factor = MATERIAL_FACTORS_KG_CO2E_PER_KG.get(
-            item.category.lower(),
-            MATERIAL_FACTORS_KG_CO2E_PER_KG["default"],
-        )
-        total_weight_kg = item.quantity * item.weight_kg_per_unit
-        material = total_weight_kg * factor
-        transport_factor = TRANSPORT_FACTORS_KG_CO2E_PER_TON_KM[item.transport_mode]
-        transport = (total_weight_kg / 1000) * item.distance_km * transport_factor
-        estimates.append(
-            CarbonItemEstimate(
-                name=item.name,
-                category=item.category,
-                emissions_kg_co2e=round(material + transport, 4),
-                material_kg_co2e=round(material, 4),
-                transport_kg_co2e=round(transport, 4),
-                factor_source=str(CARBON_LOOKUP["source"]),
-            )
-        )
-
-    total = round(sum(item.emissions_kg_co2e for item in estimates), 4)
-    return CarbonEstimateResponse(items=estimates, total_kg_co2e=total)

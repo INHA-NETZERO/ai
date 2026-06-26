@@ -13,7 +13,7 @@ class BedrockLlamaClient:
     def generate_text(
         self,
         prompt: str,
-        system_prompt: str = "You are a concise assistant for supply-chain and carbon operations.",
+        system_prompt: str = "You are a concise assistant for supply-chain operations.",
         max_tokens: int = 700,
         temperature: float = 0,
     ) -> str:

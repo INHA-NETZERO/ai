@@ -7,11 +7,9 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from app.core.config import Settings, get_settings
-from app.engines.deterministic import estimate_carbon, forecast_demand, recommend_orders
+from app.engines.deterministic import forecast_demand, recommend_orders
 from app.schemas import (
     CacheInfo,
-    CarbonEstimateRequest,
-    CarbonEstimateResponse,
     ForecastRequest,
     ForecastResponse,
     OrderRecommendationRequest,
@@ -69,11 +67,6 @@ def order_recommendation(request: OrderRecommendationRequest) -> OrderRecommenda
         OrderRecommendationResponse,
         lambda: recommend_orders(request),
     )
-
-
-@app.post("/carbon-estimate", response_model=CarbonEstimateResponse)
-def carbon_estimate(request: CarbonEstimateRequest) -> CarbonEstimateResponse:
-    return _cached_response("carbon-estimate", request, CarbonEstimateResponse, lambda: estimate_carbon(request))
 
 
 def _cached_response(

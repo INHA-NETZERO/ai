@@ -75,21 +75,3 @@ def test_order_recommendation_ortools_policy() -> None:
     assert body["method"] == "ortools_base_stock"
     assert body["recommendations"][0]["recommended_quantity"] == 8
 
-
-def test_carbon_estimate() -> None:
-    payload = {
-        "items": [
-            {
-                "name": "apple",
-                "category": "produce",
-                "quantity": 10,
-                "weight_kg_per_unit": 0.2,
-                "distance_km": 50,
-            }
-        ]
-    }
-    with TestClient(app) as client:
-        response = client.post("/carbon-estimate", json=payload)
-
-    assert response.status_code == 200
-    assert response.json()["total_kg_co2e"] > 0

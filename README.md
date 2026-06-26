@@ -1,14 +1,14 @@
 # Net-Zero AI Server
 
-FastAPI server for demand forecasting, order recommendation, and carbon estimation.
+FastAPI server for demand forecasting and order recommendation.
 
 ## Stack
 
-- FastAPI: `/forecast`, `/order-recommendation`, `/carbon-estimate`
+- FastAPI: `/forecast`, `/order-recommendation`
 - Redis: exact response cache when `REDIS_URL` is available
 - sqlite-vec vector cache: cached input embeddings and semantic cache metadata, with plain SQLite fallback
 - Amazon Bedrock: Meta Llama 3.2 1B Instruct client for LLM calls
-- Deterministic engine: LightGBM forecast, OR-Tools/base-stock order policy, carbon lookup table
+- Deterministic engine: LightGBM forecast, OR-Tools/base-stock order policy
 
 ## Bedrock model
 
