@@ -132,15 +132,18 @@ app/models/demand_lgbm_metadata.json
 
 FastAPI 서버는 위 모델 파일이 있으면 자동으로 로드합니다. 모델 파일이 없으면 서버 내부의 가벼운 fallback 예측 경로를 사용합니다.
 
-학습 스크립트는 검증셋 기준 평가 지표도 함께 출력하고 metadata에 저장합니다.
+학습 스크립트는 날짜 기준으로 오래된 데이터부터 `train 70%`, `validation 15%`, `test 15%`로 나눕니다. 모델은 train set으로 학습하고, validation set은 학습 중 성능 확인용, test set은 최종 성능 확인용으로 사용합니다.
+
+출력과 metadata에는 각 set별 평가 지표와 train 대비 test 오차 증가량인 `overfit_gap`이 저장됩니다. 발표나 문서에는 test set 지표를 최종 모델 성능으로 쓰면 됩니다.
 
 ```text
 MAE
 RMSE
 MAPE
+overfit_gap
 ```
 
-대량 CSV 학습 시에는 각 CSV에서 feature matrix를 만든 뒤 합치는 방식으로 처리해, 전체 원본 row를 한 번에 오래 들고 있는 부담을 줄였습니다.
+대량 CSV 학습 시에는 파일들을 glob으로 한 번에 넘길 수 있습니다. 학습 전 모든 row를 날짜순으로 정렬한 뒤 시간순 holdout을 만들기 때문에, 미래 데이터를 train set에 섞는 방식보다 오버피팅과 데이터 누수를 더 조심스럽게 확인할 수 있습니다.
 
 ## POS 마감 데이터 흐름
 

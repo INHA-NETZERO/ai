@@ -41,15 +41,24 @@ def main() -> None:
         model_path=Path(args.model_out),
         metadata_path=Path(args.metadata_out),
     )
+    evaluation = result["evaluation"]
     print(
         "trained demand model: "
         f"{result['training_examples']} examples, "
         f"{result['features']} features, "
-        f"MAE={result['evaluation']['mae']}, "
-        f"RMSE={result['evaluation']['rmse']}, "
-        f"MAPE={result['evaluation']['mape']}%, "
         f"model={result['model_path']}, "
         f"metadata={result['metadata_path']}"
+    )
+    print(
+        "evaluation: "
+        f"train(MAE={evaluation['train']['mae']}, RMSE={evaluation['train']['rmse']}, "
+        f"MAPE={evaluation['train']['mape']}%), "
+        f"validation(MAE={evaluation['validation']['mae']}, RMSE={evaluation['validation']['rmse']}, "
+        f"MAPE={evaluation['validation']['mape']}%), "
+        f"test(MAE={evaluation['test']['mae']}, RMSE={evaluation['test']['rmse']}, "
+        f"MAPE={evaluation['test']['mape']}%), "
+        f"overfit_gap(MAE={evaluation['overfit_gap']['mae']}, "
+        f"RMSE={evaluation['overfit_gap']['rmse']}, MAPE={evaluation['overfit_gap']['mape']}%)"
     )
 
 

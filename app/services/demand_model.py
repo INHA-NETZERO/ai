@@ -83,7 +83,14 @@ def train_lightgbm_model(
 
     import lightgbm as lgb
 
-    train_features, train_targets, valid_features, valid_targets = _train_validation_split(features, targets)
+    (
+        train_features,
+        train_targets,
+        valid_features,
+        valid_targets,
+        test_features,
+        test_targets,
+    ) = _train_validation_test_split(features, targets)
     dataset = lgb.Dataset(train_features, label=train_targets, feature_name=FEATURE_NAMES, free_raw_data=False)
     model = lgb.train(
         {
@@ -99,7 +106,12 @@ def train_lightgbm_model(
         dataset,
         num_boost_round=120,
     )
-    evaluation = _evaluate_model(model, valid_features, valid_targets)
+    evaluation = {
+        "train": _evaluate_model(model, train_features, train_targets),
+        "validation": _evaluate_model(model, valid_features, valid_targets),
+        "test": _evaluate_model(model, test_features, test_targets),
+    }
+    evaluation["overfit_gap"] = _overfit_gap(evaluation["train"], evaluation["test"])
 
     model_path.parent.mkdir(parents=True, exist_ok=True)
     model.save_model(str(model_path))
@@ -107,6 +119,7 @@ def train_lightgbm_model(
     metadata["training_examples"] = int(len(targets))
     metadata["train_examples"] = int(len(train_targets))
     metadata["validation_examples"] = int(len(valid_targets))
+    metadata["test_examples"] = int(len(test_targets))
     metadata["evaluation"] = evaluation
     metadata["training_columns"] = TRAINING_COLUMNS
     metadata["training_files"] = [str(path) for path in training_paths]
@@ -188,16 +201,10 @@ def _load_inventory_rows(paths: list[Path]) -> list[dict[str, str]]:
 
 
 def _build_training_matrix_from_paths(paths: list[Path], metadata: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
-    feature_chunks = []
-    target_chunks = []
-    for path in paths:
-        features, targets = _build_training_matrix(_load_inventory_rows([path]), metadata)
-        if len(targets):
-            feature_chunks.append(features)
-            target_chunks.append(targets)
-    if not target_chunks:
+    rows = _load_inventory_rows(paths)
+    if not rows:
         return np.empty((0, len(FEATURE_NAMES))), np.empty((0,))
-    return np.vstack(feature_chunks), np.concatenate(target_chunks)
+    return _build_training_matrix(rows, metadata)
 
 
 def _augment_metadata_from_training_paths(paths: list[Path], metadata: dict[str, Any]) -> dict[str, Any]:
@@ -269,26 +276,39 @@ def _build_metadata(item_master: list[dict[str, str]], order_policy: list[dict[s
 def _build_training_matrix(rows: list[dict[str, str]], metadata: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
     features = []
     targets = []
-    for row in rows:
+    sorted_rows = sorted(rows, key=lambda row: (row["날짜"], row.get("_source_file", ""), row["품목"]))
+    for row in sorted_rows:
         features.append(_training_row_features(row, metadata))
         targets.append(_to_float(row["판매수량"]))
     return np.array(features, dtype=np.float64), np.array(targets, dtype=np.float64)
 
 
-def _train_validation_split(
+def _train_validation_test_split(
     features: np.ndarray,
     targets: np.ndarray,
-    validation_ratio: float = 0.2,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    validation_size = max(1, int(len(targets) * validation_ratio))
-    if len(targets) - validation_size < 5:
-        validation_size = max(1, len(targets) - 5)
-    split_at = len(targets) - validation_size
+    validation_ratio: float = 0.15,
+    test_ratio: float = 0.15,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    # Time-based split: train on older rows, validate/tune on later rows, test on the newest holdout.
+    total = len(targets)
+    test_size = max(1, int(total * test_ratio))
+    validation_size = max(1, int(total * validation_ratio))
+    train_size = total - validation_size - test_size
+    if train_size < 5:
+        train_size = max(1, total - 2)
+        remaining = total - train_size
+        validation_size = max(1, remaining // 2)
+        test_size = remaining - validation_size
+
+    validation_start = train_size
+    test_start = train_size + validation_size
     return (
-        features[:split_at],
-        targets[:split_at],
-        features[split_at:],
-        targets[split_at:],
+        features[:validation_start],
+        targets[:validation_start],
+        features[validation_start:test_start],
+        targets[validation_start:test_start],
+        features[test_start:test_start + test_size],
+        targets[test_start:test_start + test_size],
     )
 
 
@@ -305,6 +325,14 @@ def _evaluate_model(model: Any, features: np.ndarray, targets: np.ndarray) -> di
         "mae": round(mae, 4),
         "rmse": round(rmse, 4),
         "mape": round(mape, 4),
+    }
+
+
+def _overfit_gap(train_metrics: dict[str, float], test_metrics: dict[str, float]) -> dict[str, float]:
+    return {
+        "mae": round(test_metrics["mae"] - train_metrics["mae"], 4),
+        "rmse": round(test_metrics["rmse"] - train_metrics["rmse"], 4),
+        "mape": round(test_metrics["mape"] - train_metrics["mape"], 4),
     }
 
 
