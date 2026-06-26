@@ -127,3 +127,21 @@ class GenerateResponse(BaseModel):
     latency_ms: int = Field(..., alias="latencyMs")
     tokens: int
 
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    question: str
+    locale: str = "ko"
+    grounding: dict[str, Any]
+    history: list[ChatMessage] = Field(default_factory=list)
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    cache_hit: bool = Field(..., alias="cacheHit")
+    latency_ms: int = Field(..., alias="latencyMs")
+    tokens: int

@@ -246,11 +246,33 @@ def test_v1_generate_returns_required_metrics_and_cache_hit() -> None:
     assert second.json()["tokens"] >= 1
 
 
-def test_v1_chat_is_not_part_of_final_ai_contract() -> None:
+def test_v1_chat_returns_followup_answer_and_cache_hit() -> None:
+    question = f"왜 이 수량인지 더 자세히 알려줘 {uuid4()}"
+    payload = {
+        "question": question,
+        "locale": "ko",
+        "grounding": {
+            "item": {"itemId": 101, "itemName": "우유", "unit": "L"},
+            "forecast": {"p10": 60, "p50": 80, "p90": 108},
+            "recommendation": {"recommendedQuantity": 66},
+            "carbon": {"potentialSavingKg": 39.4},
+        },
+        "history": [
+            {
+                "role": "assistant",
+                "content": "우유는 66L 발주를 권장합니다.",
+            }
+        ],
+    }
     with TestClient(app) as client:
-        response = client.post("/v1/chat", json={"question": "챗봇 되나요?"})
+        first = client.post("/v1/chat", json=payload)
+        second = client.post("/v1/chat", json=payload)
 
-    assert response.status_code == 404
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["cacheHit"] is False
+    assert second.json()["cacheHit"] is True
+    assert second.json()["tokens"] >= 1
 
 
 def test_v1_validation_errors_use_contract_shape() -> None:

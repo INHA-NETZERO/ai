@@ -1,13 +1,13 @@
 # Net-Zero AI Server
 
-백엔드가 넘겨준 POS 판매 이력과 grounding 데이터를 기반으로 수요 예측과 자연어 설명을 제공하는 FastAPI 서버입니다. AI 서버는 LightGBM 수요예측과 sLLM 설명 생성만 담당하고, 발주 최적화·탄소 산정·DB 저장은 백엔드가 담당합니다.
+백엔드가 넘겨준 POS 판매 이력과 grounding 데이터를 기반으로 수요 예측, 자연어 코멘트, 후속 챗봇 설명을 제공하는 FastAPI 서버입니다. 수치 예측은 LightGBM이 담당하고, 같은 로컬 Llama 3.2 1B가 짧은 코멘트와 사용자 질문 답변을 생성합니다.
 
 ## 기술 스택
 
-- FastAPI: `/v1/forecast`, `/v1/order-recommendation`, `/v1/generate`
+- FastAPI: `/v1/forecast`, `/v1/order-recommendation`, `/v1/generate`, `/v1/chat`
 - Redis: deterministic 계산 결과용 exact cache. `REDIS_URL`이 없거나 Redis가 꺼져 있으면 인메모리 캐시 사용
-- sqlite-vec: `/v1/generate` sLLM 설명용 semantic cache
-- Local Llama: Ollama의 `llama3.2:1b` 또는 Hugging Face `meta-llama/Llama-3.2-1B-Instruct`로 grounding 기반 설명 생성
+- sqlite-vec: `/v1/generate`, `/v1/chat` sLLM 설명용 semantic cache
+- Local Llama: Ollama의 `llama3.2:1b` 또는 Hugging Face `meta-llama/Llama-3.2-1B-Instruct`로 grounding 기반 코멘트와 챗봇 답변 생성
 - 예측 엔진: LightGBM 수요 분위 예측, 모델 미준비 시 `baseline_v1` 폴백
 
 ## 현재 구현 기준
@@ -28,14 +28,28 @@ curl -s http://127.0.0.1:8000/integration-status | python -m json.tool
 
 ## 로컬 Llama 설정
 
-`/v1/generate`는 `app/services/llm.py`의 `LocalLlamaClient`를 사용합니다.
-AI 서버는 grounding의 숫자를 바꾸거나 새 수치를 만들지 않고, 받은 근거를 한국어 설명으로만 바꿉니다. `/daily-close`, `/v1/chat`은 최종 계약에 포함되지 않습니다.
+`/v1/generate`와 `/v1/chat`은 모두 `app/services/llm.py`의 `LocalLlamaClient`를 사용합니다.
+AI 서버는 grounding의 숫자를 바꾸거나 새 수치를 만들지 않고, 받은 근거를 한국어 설명으로만 바꿉니다.
 
 기본 방식은 Ollama입니다.
 
 ```bash
 ollama pull llama3.2:1b
 ollama serve
+```
+
+Ollama는 Llama 모델 서버입니다. FastAPI 서버와 별도로 켜져 있어야 합니다.
+
+터미널 1에서 Llama 서버:
+
+```bash
+ollama serve
+```
+
+터미널 2에서 FastAPI 서버:
+
+```bash
+.venv/bin/uvicorn app.main:app --reload
 ```
 
 `.env` 설정:
@@ -308,6 +322,24 @@ curl -X POST http://127.0.0.1:8000/v1/generate \
   }'
 ```
 
+사용자 후속 질문:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "question":"왜 이 수량인지 더 자세히 알려줘",
+    "locale":"ko",
+    "grounding":{
+      "item":{"itemId":101,"itemName":"우유","unit":"L"},
+      "forecast":{"p10":60,"p50":80,"p90":108},
+      "recommendation":{"recommendedQuantity":66},
+      "carbon":{"potentialSavingKg":39.4}
+    },
+    "history":[{"role":"assistant","content":"우유는 66L 발주를 권장합니다."}]
+  }'
+```
+
 ## API 명세
 
 ### `GET /health`
@@ -331,13 +363,14 @@ curl -X POST http://127.0.0.1:8000/v1/generate \
 
 ### Spring 백엔드 연동용 `/v1` 계약
 
-Spring 백엔드가 붙는 API는 아래 세 개입니다. `/daily-close`, `/v1/chat`은 최종 계약에 포함되지 않습니다. 기존 `/forecast`, `/order-recommendation`은 로컬 개발용 데모 엔드포인트입니다.
+Spring 백엔드가 붙는 API는 아래 네 개입니다. 기존 `/forecast`, `/order-recommendation`은 로컬 개발용 데모 엔드포인트입니다.
 
 | Method | Path | 역할 |
 | --- | --- | --- |
 | `POST` | `/v1/order-recommendation` | 발주 커버기간 일별 p10/p50/p90 수요예측 |
 | `POST` | `/v1/forecast` | 다음날 단일일 p10/p50/p90 수요예측 |
-| `POST` | `/v1/generate` | 백엔드 grounding 기반 자연어 설명 |
+| `POST` | `/v1/generate` | LightGBM/백엔드 grounding 기반 짧은 자연어 코멘트 |
+| `POST` | `/v1/chat` | 같은 grounding과 history 기반 후속 챗봇 설명 |
 
 `/v1` API는 상태 없는 서비스로 동작합니다. DB를 직접 읽지 않고, 요청 body와 `salesHistory.presignedUrls`로 받은 CSV만 사용합니다.
 
@@ -444,6 +477,39 @@ Spring 백엔드가 붙는 API는 아래 세 개입니다. `/daily-close`, `/v1/
   "cacheHit": false,
   "latencyMs": 12,
   "tokens": 142
+}
+```
+
+#### `POST /v1/chat`
+
+`/v1/generate`로 짧은 코멘트를 보여준 뒤, 사용자가 추가 질문을 입력하면 같은 grounding과 대화 history를 받아 더 자세히 설명합니다. 수치는 grounding에 있는 값만 인용하고 새로 계산하지 않습니다.
+
+요청 예시:
+
+```json
+{
+  "question": "왜 66L가 적당한지 더 자세히 알려줘",
+  "locale": "ko",
+  "grounding": {
+    "item": { "itemId": 101, "itemName": "우유", "unit": "L" },
+    "forecast": { "p10": 60, "p50": 80, "p90": 108 },
+    "recommendation": { "recommendedQuantity": 66 },
+    "carbon": { "potentialSavingKg": 39.4 }
+  },
+  "history": [
+    { "role": "assistant", "content": "우유는 66L 발주를 권장합니다." }
+  ]
+}
+```
+
+응답 예시:
+
+```json
+{
+  "answer": "제공된 근거 기준으로 우유의 추천 발주량은 66L입니다. 수요 중앙값은 80L이고 잠재 탄소 절감량은 39.4kgCO2e로 제공되어, 과발주를 줄이는 방향의 추천으로 볼 수 있습니다.",
+  "cacheHit": false,
+  "latencyMs": 18,
+  "tokens": 168
 }
 ```
 
@@ -599,9 +665,9 @@ S3 POS 마감 CSV
 ## 캐시 정책
 
 - `/forecast`, `/order-recommendation`: exact cache 사용
-- `/v1/generate`: semantic cache 사용
+- `/v1/generate`, `/v1/chat`: semantic cache 사용
 
-수요 예측은 숫자 정확도가 중요하므로 semantic cache를 사용하지 않습니다. semantic cache는 sLLM 자연어 설명의 유사 질문 답변 재사용에만 사용합니다.
+수요 예측은 숫자 정확도가 중요하므로 semantic cache를 사용하지 않습니다. semantic cache는 sLLM 자연어 설명과 후속 챗봇 답변 재사용에만 사용합니다.
 
 Redis가 없으면 exact cache는 인메모리로 동작합니다. semantic cache는 sqlite-vec를 우선 사용하고, 환경에 따라 일반 SQLite fallback 경로를 사용합니다.
 

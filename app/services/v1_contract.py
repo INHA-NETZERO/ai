@@ -11,6 +11,9 @@ import httpx
 import numpy as np
 
 from app.api_contracts import (
+    ChatMessage,
+    ChatRequest,
+    ChatResponse,
     DailyQuantilePrediction,
     GenerateRequest,
     GenerateResponse,
@@ -174,6 +177,52 @@ def generate_grounded_answer(
     tokens = _estimate_tokens(request.question, request.grounding, answer)
     semantic_cache.set(namespace, request.question, {"answer": answer, "tokens": tokens})
     return GenerateResponse(answer=answer, cacheHit=False, latencyMs=_elapsed_ms(start), tokens=tokens)
+
+
+def generate_chat_answer(
+    request: ChatRequest,
+    semantic_cache: ChatSemanticCache,
+    llm_client: LocalLlamaClient | None,
+) -> ChatResponse:
+    start = time.perf_counter()
+    grounding_text = _stable_grounding_text(request.grounding)
+    grounding_hash = hashlib.sha256(grounding_text.encode("utf-8")).hexdigest()
+    history_hash = hashlib.sha256(_stable_history_text(request.history).encode("utf-8")).hexdigest()
+    namespace = f"v1:chat:{request.locale}:{grounding_hash}:{history_hash}"
+    cached = semantic_cache.get(namespace, request.question)
+    if cached is not None:
+        response, _score = cached
+        return ChatResponse(
+            answer=str(response["answer"]),
+            cacheHit=True,
+            latencyMs=_elapsed_ms(start),
+            tokens=int(response.get("tokens", 0)),
+        )
+
+    answer = _fallback_grounded_answer(
+        GenerateRequest(question=request.question, locale=request.locale, grounding=request.grounding)
+    )
+    if llm_client is not None:
+        try:
+            answer = llm_client.generate_text(
+                prompt=_chat_prompt(request),
+                system_prompt=(
+                    "You are a lightweight Korean ordering explanation chatbot. "
+                    "Use only the provided grounding and chat history. "
+                    "Never invent, change, or recalculate numbers. "
+                    "If the grounding does not contain the answer, say that the provided basis is insufficient."
+                ),
+                max_tokens=360,
+                temperature=0,
+            )
+        except Exception:
+            answer = _fallback_grounded_answer(
+                GenerateRequest(question=request.question, locale=request.locale, grounding=request.grounding)
+            )
+
+    tokens = _estimate_tokens(request.question, request.grounding, answer) + _estimate_history_tokens(request.history)
+    semantic_cache.set(namespace, request.question, {"answer": answer, "tokens": tokens})
+    return ChatResponse(answer=answer, cacheHit=False, latencyMs=_elapsed_ms(start), tokens=tokens)
 
 
 def _baseline_quantile(ma7: float, trend: float, offset: int, weather: WeatherDay | None) -> QuantilePrediction:
@@ -406,6 +455,20 @@ def _generate_prompt(request: GenerateRequest) -> str:
     )
 
 
+def _chat_prompt(request: ChatRequest) -> str:
+    history = "\n".join(
+        f"{message.role}: {message.content}"
+        for message in request.history[-6:]
+    )
+    return (
+        f"사용자 질문: {request.question}\n"
+        f"언어: {request.locale}\n"
+        f"이전 대화:\n{history or '없음'}\n"
+        f"근거: {_stable_grounding_text(request.grounding)}\n"
+        "근거에 있는 숫자와 사실만 사용해서 한국어로 자세하지만 짧게 답하세요."
+    )
+
+
 def _fallback_grounded_answer(request: GenerateRequest) -> str:
     grounding = request.grounding
     item = grounding.get("item", {})
@@ -436,8 +499,21 @@ def _stable_grounding_text(grounding: dict[str, Any]) -> str:
     return json.dumps(grounding, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _stable_history_text(history: list[ChatMessage]) -> str:
+    return json.dumps(
+        [message.model_dump() for message in history[-6:]],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _estimate_tokens(question: str, grounding: dict[str, Any], answer: str) -> int:
     return max(1, int((len(question) + len(_stable_grounding_text(grounding)) + len(answer)) / 3))
+
+
+def _estimate_history_tokens(history: list[ChatMessage]) -> int:
+    return int(sum(len(message.content) for message in history[-6:]) / 3)
 
 
 def _elapsed_ms(start: float) -> int:

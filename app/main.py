@@ -8,6 +8,8 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ValidationError
 
 from app.api_contracts import (
+    ChatRequest,
+    ChatResponse,
     GenerateRequest,
     GenerateResponse,
     V1ForecastRequest,
@@ -33,6 +35,7 @@ from app.services.integration_status import build_integration_status
 from app.services.v1_contract import (
     LLM_MODEL_VERSION,
     MODEL_VERSION,
+    generate_chat_answer,
     generate_grounded_answer,
     predict_order_quantiles,
     predict_single_day_quantiles,
@@ -168,6 +171,22 @@ def v1_generate(payload: dict[str, Any] = Body(...)) -> GenerateResponse:
     request = _validate_body(GenerateRequest, payload)
     state: AppState = app.state.runtime
     response = generate_grounded_answer(
+        request,
+        semantic_cache=_chat_semantic_cache(state),
+        llm_client=state.llm_client,
+    )
+    if response.cache_hit:
+        state.cache_metrics.semantic_hits += 1
+    else:
+        state.cache_metrics.semantic_misses += 1
+    return response
+
+
+@app.post("/v1/chat", response_model=ChatResponse)
+def v1_chat(payload: dict[str, Any] = Body(...)) -> ChatResponse:
+    request = _validate_body(ChatRequest, payload)
+    state: AppState = app.state.runtime
+    response = generate_chat_answer(
         request,
         semantic_cache=_chat_semantic_cache(state),
         llm_client=state.llm_client,
