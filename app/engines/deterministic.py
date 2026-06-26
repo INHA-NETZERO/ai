@@ -21,10 +21,12 @@ def forecast_demand(request: ForecastRequest) -> ForecastResponse:
         by_sku[point.sku].append(point)
 
     forecasts: list[ForecastPoint] = []
+    methods = set()
     for sku, points in by_sku.items():
         ordered = sorted(points, key=lambda point: point.period)
         quantities = np.array([point.quantity for point in ordered], dtype=np.float64)
-        next_values = _lightgbm_forecast(quantities, request.horizon)
+        next_values, method = _forecast_values(quantities, request.horizon)
+        methods.add(method)
         start = _next_period(ordered[-1].period)
         for offset, quantity in enumerate(next_values):
             forecasts.append(
@@ -35,7 +37,7 @@ def forecast_demand(request: ForecastRequest) -> ForecastResponse:
                 )
             )
 
-    method = "lightgbm" if _lightgbm_available() and len(request.history) >= 6 else "moving_average_trend"
+    method = "lightgbm" if methods == {"lightgbm"} else "moving_average_trend"
     return ForecastResponse(forecasts=forecasts, method=method)
 
 
@@ -48,28 +50,36 @@ def _lightgbm_available() -> bool:
         return False
 
 
-def _lightgbm_forecast(values: np.ndarray, horizon: int) -> list[float]:
-    if len(values) < 6 or not _lightgbm_available():
-        return _moving_average_trend(values, horizon)
+def _forecast_values(values: np.ndarray, horizon: int) -> tuple[list[float], str]:
+    if len(values) < 4 or not _lightgbm_available():
+        return _moving_average_trend(values, horizon), "moving_average_trend"
 
     import lightgbm as lgb
 
-    window = min(7, len(values) - 1)
+    window = min(3, len(values) - 1)
     features = []
     targets = []
     for idx in range(window, len(values)):
         features.append(values[idx - window : idx])
         targets.append(values[idx])
 
-    model = lgb.LGBMRegressor(
-        n_estimators=30,
-        learning_rate=0.1,
-        max_depth=3,
-        min_child_samples=1,
-        verbosity=-1,
-        random_state=42,
-    )
-    model.fit(np.array(features), np.array(targets))
+    try:
+        dataset = lgb.Dataset(np.array(features), label=np.array(targets), free_raw_data=False)
+        model = lgb.train(
+            {
+                "objective": "regression",
+                "metric": "l2",
+                "learning_rate": 0.1,
+                "max_depth": 3,
+                "min_data_in_leaf": 1,
+                "verbosity": -1,
+                "seed": 42,
+            },
+            dataset,
+            num_boost_round=30,
+        )
+    except Exception:
+        return _moving_average_trend(values, horizon), "moving_average_trend"
 
     rolling = list(values[-window:])
     output = []
@@ -77,7 +87,7 @@ def _lightgbm_forecast(values: np.ndarray, horizon: int) -> list[float]:
         prediction = float(model.predict(np.array([rolling[-window:]]))[0])
         output.append(prediction)
         rolling.append(max(0.0, prediction))
-    return output
+    return output, "lightgbm"
 
 
 def _moving_average_trend(values: np.ndarray, horizon: int) -> list[float]:
