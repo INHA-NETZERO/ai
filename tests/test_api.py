@@ -2,6 +2,8 @@ from fastapi.testclient import TestClient
 from io import BytesIO
 from uuid import uuid4
 
+import pytest
+
 from app.core.config import Settings
 from app.main import app
 from app.services.aws_clients import create_aws_session
@@ -434,3 +436,17 @@ def test_bedrock_client_keeps_legacy_api_key_fallback(monkeypatch) -> None:
 
     assert client.generate_text("hello", max_tokens=10) == "ok"
     assert captured["headers"]["Authorization"] == "Bearer legacy-secret"
+
+
+def test_check_s3_direct_mode_requires_bucket(monkeypatch) -> None:
+    from scripts import check_s3
+
+    monkeypatch.setattr(
+        "scripts.check_s3.get_settings",
+        lambda: Settings(_env_file=None, s3_bucket=None),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        check_s3.check_direct_s3()
+
+    assert "S3_BUCKET is not set" in str(exc.value)

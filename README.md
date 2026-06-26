@@ -117,6 +117,12 @@ Spring 백엔드 연동용 `/v1/forecast`, `/v1/order-recommendation`은 요청 
 
 이 방식은 URL 자체에 임시 읽기 권한이 들어 있으므로 AI 서버에 S3 Access Key가 없어도 됩니다. URL 유효시간이 끝났거나 다운로드가 실패하면 해당 이력 없이 baseline 경로로 폴백합니다.
 
+presigned URL 다운로드만 확인하려면 아래처럼 실행합니다.
+
+```bash
+.venv/bin/python scripts/check_s3.py --url 'https://bucket.s3.ap-northeast-2.amazonaws.com/sales.csv?...'
+```
+
 기존 데모 API(`/forecast`, `/order-recommendation`, `/daily-close`, `/chat`)가 로컬 CSV 대신 S3 CSV를 직접 읽게 하려면 `.env`를 아래처럼 설정합니다.
 
 ```text
@@ -145,6 +151,14 @@ s3:GetObject
 ```
 
 대상은 위 세 CSV 객체입니다. AWS 인증은 환경변수, `AWS_PROFILE`, EC2/ECS IAM Role 등 boto3 기본 인증 체인을 따릅니다. Spring 백엔드의 presigned URL 방식만 쓸 때는 이 설정이 필요 없습니다.
+
+주의: `AWS_BEARER_TOKEN_BEDROCK`은 Bedrock 호출 전용 bearer token입니다. S3 직접 읽기에는 사용할 수 없습니다.
+
+직접 S3 설정이 맞는지 확인하려면 `.env` 설정 후 아래 명령을 실행합니다.
+
+```bash
+.venv/bin/python scripts/check_s3.py
+```
 
 ## 로컬 실행
 
