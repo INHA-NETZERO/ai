@@ -104,6 +104,21 @@ def _build_output_rows(
         stockout = _to_float(latest.get("결품", 0))
         historical_order = _to_float(latest.get("발주", 0))
         recommended_quantity = _to_float(recommendation["recommended_quantity"])
+        order_reduction = max(0.0, historical_order - recommended_quantity)
+        existing_waste = _to_float(latest.get("폐기", 0))
+        existing_waste_kg = _to_float(latest.get("폐기_kg", 0))
+        existing_carbon = _to_float(latest.get("탄소_kgCO2e", 0))
+        expected_waste_reduction = min(order_reduction, existing_waste)
+        expected_waste_reduction_kg = (
+            existing_waste_kg * expected_waste_reduction / existing_waste
+            if existing_waste > 0
+            else 0.0
+        )
+        expected_carbon_saving = (
+            existing_carbon * expected_waste_reduction / existing_waste
+            if existing_waste > 0
+            else 0.0
+        )
         output.append(
             {
                 "business_date": latest.get("날짜", ""),
@@ -121,6 +136,12 @@ def _build_output_rows(
                 "recommended_quantity": recommended_quantity,
                 "historical_order_quantity": historical_order,
                 "recommendation_minus_historical": round(recommended_quantity - historical_order, 3),
+                "order_reduction_quantity": round(order_reduction, 3),
+                "existing_waste_quantity": existing_waste,
+                "expected_waste_reduction_quantity": round(expected_waste_reduction, 3),
+                "expected_waste_reduction_kg": round(expected_waste_reduction_kg, 4),
+                "existing_carbon_kgco2e": existing_carbon,
+                "expected_carbon_saving_kgco2e": round(expected_carbon_saving, 4),
                 "reason": recommendation["reason"],
             }
         )
@@ -149,6 +170,10 @@ def _summary(
     total_recommended = round(sum(_to_float(row["recommended_quantity"]) for row in rows), 3)
     total_historical = round(sum(_to_float(row["historical_order_quantity"]) for row in rows), 3)
     total_forecast = round(sum(_to_float(row["forecast_total"]) for row in rows), 3)
+    total_order_reduction = round(sum(_to_float(row["order_reduction_quantity"]) for row in rows), 3)
+    total_waste_reduction = round(sum(_to_float(row["expected_waste_reduction_quantity"]) for row in rows), 3)
+    total_waste_reduction_kg = round(sum(_to_float(row["expected_waste_reduction_kg"]) for row in rows), 4)
+    total_carbon_saving = round(sum(_to_float(row["expected_carbon_saving_kgco2e"]) for row in rows), 4)
     ordered_items = sum(1 for row in rows if _to_float(row["recommended_quantity"]) > 0)
     return {
         "business_date": business_date,
@@ -161,18 +186,23 @@ def _summary(
         "total_recommended_quantity": total_recommended,
         "total_historical_order_quantity": total_historical,
         "total_recommendation_minus_historical": round(total_recommended - total_historical, 3),
+        "total_order_reduction_quantity": total_order_reduction,
+        "total_expected_waste_reduction_quantity": total_waste_reduction,
+        "total_expected_waste_reduction_kg": total_waste_reduction_kg,
+        "total_expected_carbon_saving_kgco2e": total_carbon_saving,
     }
 
 
 def _write_output(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    output_rows = [_korean_row(row) for row in rows]
     if path.suffix.lower() == ".json":
-        path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(json.dumps(output_rows, ensure_ascii=False, indent=2), encoding="utf-8")
         return
     with path.open("w", encoding="utf-8-sig", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=list(rows[0]) if rows else [])
+        writer = csv.DictWriter(csv_file, fieldnames=list(output_rows[0]) if output_rows else [])
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(output_rows)
 
 
 def _write_report(path: Path, summary: dict[str, Any], rows: list[dict[str, Any]]) -> None:
@@ -187,11 +217,23 @@ def _write_report(path: Path, summary: dict[str, Any], rows: list[dict[str, Any]
             "",
             _markdown_table(rows),
             "",
+            "## 시연 흐름",
+            "",
+            "```text",
+            "시연용 판매/마감 데이터 -> LightGBM 수요 예측 -> 추천 발주량",
+            "                                   ↓",
+            "                         기존 발주량과 비교",
+            "                                   ↓",
+            "                         폐기 감소 -> 탄소 절감",
+            "```",
+            "",
             "## 산식",
             "",
             "- 추천 발주량 = max(0, base-stock level - 현재 가용재고)을 발주단위에 맞춰 올림한 값",
             "- base-stock level = 예측 수요 + 안전재고",
             "- 기존 발주 대비 = 추천 발주량 - 더미 데이터의 기존 발주량",
+            "- 예상 폐기 감소 = min(기존 발주량 - 추천 발주량, 기존 폐기량)",
+            "- 예상 탄소 절감 = 기존 폐기 탄소량 × 예상 폐기 감소 / 기존 폐기량",
             "",
         ]
     )
@@ -215,6 +257,9 @@ def _human_summary(summary: dict[str, Any]) -> str:
             f"추천 발주량 합계: {summary['total_recommended_quantity']}",
             f"기존 발주량 합계: {summary['total_historical_order_quantity']}",
             f"기존 대비 증감: {summary['total_recommendation_minus_historical']:+}",
+            f"발주 감축량 합계: {summary['total_order_reduction_quantity']}",
+            f"예상 폐기 감소: {summary['total_expected_waste_reduction_quantity']}개 / {summary['total_expected_waste_reduction_kg']}kg",
+            f"예상 탄소 절감: {summary['total_expected_carbon_saving_kgco2e']}kgCO2e",
         ]
     )
 
@@ -239,6 +284,8 @@ def _markdown_table(rows: list[dict[str, Any]]) -> str:
         "추천발주",
         "기존발주",
         "증감",
+        "예상폐기감소",
+        "예상탄소절감",
     ]
     lines = [
         "| " + " | ".join(headers) + " |",
@@ -253,9 +300,38 @@ def _markdown_table(rows: list[dict[str, Any]]) -> str:
             _format_number(row["recommended_quantity"]),
             _format_number(row["historical_order_quantity"]),
             _format_signed(row["recommendation_minus_historical"]),
+            _format_number(row["expected_waste_reduction_quantity"]),
+            f"{_format_number(row['expected_carbon_saving_kgco2e'])}kgCO2e",
         ]
         lines.append("| " + " | ".join(values) + " |")
     return "\n".join(lines)
+
+
+def _korean_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "마감일": row["business_date"],
+        "품목": row["itemName"],
+        "구분": row["itemType"],
+        "단위": row["unit"],
+        "최근수요": row["latest_demand"],
+        "최근판매": row["latest_sales"],
+        "현재재고": row["current_stock"],
+        "결품": row["stockout"],
+        "예측일수": row["forecast_days"],
+        "예측수요합계": row["forecast_total"],
+        "기준재고수준": row["base_stock_level"],
+        "가용재고": row["projected_position"],
+        "추천발주량": row["recommended_quantity"],
+        "기존발주량": row["historical_order_quantity"],
+        "추천-기존": row["recommendation_minus_historical"],
+        "발주감축량": row["order_reduction_quantity"],
+        "기존폐기량": row["existing_waste_quantity"],
+        "예상폐기감소량": row["expected_waste_reduction_quantity"],
+        "예상폐기감소_kg": row["expected_waste_reduction_kg"],
+        "기존폐기탄소_kgCO2e": row["existing_carbon_kgco2e"],
+        "예상탄소절감_kgCO2e": row["expected_carbon_saving_kgco2e"],
+        "추천근거": "예측 수요와 안전재고를 기준으로 현재 가용재고를 보충하도록 계산",
+    }
 
 
 def _format_number(value: Any) -> str:
