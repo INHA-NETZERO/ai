@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from app.core.config import Settings, get_settings
-from app.engines.deterministic import forecast_demand, recommend_orders
+from app.engines.deterministic import forecast_demand_from_closing_data, recommend_orders
 from app.schemas import (
     CacheInfo,
     ChatRequest,
@@ -16,7 +16,7 @@ from app.schemas import (
     OrderRecommendationResponse,
 )
 from app.services.cache import ExactCache, cache_key
-from app.services.demo_data import build_forecast_request, build_order_request, closing_cache_payload, load_demo_closing_data
+from app.services.demo_data import build_order_request, closing_cache_payload, load_demo_closing_data
 from app.services.llm import BedrockLlamaClient
 from app.services.semantic_cache import ChatSemanticCache
 
@@ -56,15 +56,14 @@ def health() -> dict[str, str]:
 @app.post("/forecast", response_model=ForecastResponse)
 def forecast() -> ForecastResponse:
     data = load_demo_closing_data()
-    request = build_forecast_request(data)
     payload = closing_cache_payload(data)
-    return _cached_response("forecast", payload, ForecastResponse, lambda: forecast_demand(request))
+    return _cached_response("forecast", payload, ForecastResponse, lambda: forecast_demand_from_closing_data(data))
 
 
 @app.post("/order-recommendation", response_model=OrderRecommendationResponse)
 def order_recommendation() -> OrderRecommendationResponse:
     data = load_demo_closing_data()
-    forecast_response = forecast_demand(build_forecast_request(data))
+    forecast_response = forecast_demand_from_closing_data(data)
     request = build_order_request(data, forecast_response.forecasts)
     payload = closing_cache_payload(data) | {"policy": request.policy}
     return _cached_response(
@@ -81,7 +80,7 @@ def daily_close() -> DailyCloseResponse:
     payload = closing_cache_payload(data) | {"output": "llm_summary"}
 
     def factory() -> DailyCloseResponse:
-        forecast_response = forecast_demand(build_forecast_request(data))
+        forecast_response = forecast_demand_from_closing_data(data)
         order_response = recommend_orders(build_order_request(data, forecast_response.forecasts))
         llm_output = _build_llm_output(data, forecast_response, order_response)
         return DailyCloseResponse(
@@ -108,7 +107,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         response["cache"] = CacheInfo(semantic_hit=True, semantic_score=score).model_dump()
         return ChatResponse.model_validate(response)
 
-    forecast_response = forecast_demand(build_forecast_request(data))
+    forecast_response = forecast_demand_from_closing_data(data)
     order_response = recommend_orders(build_order_request(data, forecast_response.forecasts))
     answer = _build_chat_answer(data, order_response, request.question)
     response = ChatResponse(answer=answer).model_dump()

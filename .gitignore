@@ -157,6 +157,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# Local trained model artifacts
+app/models/*.txt
+app/models/*.json
+
 # Spyder project settings
 .spyderproject
 .spyproject

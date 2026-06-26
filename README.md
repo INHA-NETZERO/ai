@@ -37,6 +37,25 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
+## Train Local Demand Model
+
+Put generated inventory-flow CSV files under `app/data/training/`, then train and save the initial LightGBM model:
+
+```bash
+.venv/bin/python scripts/train_lightgbm.py --inventory "app/data/training/*.csv"
+```
+
+If `app/data/training/` is empty, the script falls back to `app/data/inventory_flow_5days.csv` for a small smoke-test model.
+
+Saved artifacts:
+
+```text
+app/models/demand_lgbm.txt
+app/models/demand_lgbm_metadata.json
+```
+
+The FastAPI server automatically loads these files when they exist. If they are missing, it falls back to the lightweight in-process forecast path.
+
 API docs:
 
 ```text

@@ -13,6 +13,7 @@ from app.schemas import (
     OrderRecommendationResponse,
     RecommendedOrder,
 )
+from app.services.demand_model import forecast_with_saved_model
 
 
 def forecast_demand(request: ForecastRequest) -> ForecastResponse:
@@ -39,6 +40,16 @@ def forecast_demand(request: ForecastRequest) -> ForecastResponse:
 
     method = "lightgbm" if methods == {"lightgbm"} else "moving_average_trend"
     return ForecastResponse(forecasts=forecasts, method=method)
+
+
+def forecast_demand_from_closing_data(data: dict) -> ForecastResponse:
+    saved_model_response = forecast_with_saved_model(data)
+    if saved_model_response is not None:
+        return saved_model_response
+
+    from app.services.demo_data import build_forecast_request
+
+    return forecast_demand(build_forecast_request(data))
 
 
 def _lightgbm_available() -> bool:

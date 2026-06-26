@@ -17,7 +17,7 @@ def test_forecast() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["method"] == "lightgbm"
+    assert body["method"] in {"lightgbm", "lightgbm_saved_model"}
     assert len(body["forecasts"]) == 144
 
 
