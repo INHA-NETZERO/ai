@@ -1,6 +1,45 @@
+from dataclasses import dataclass
 from typing import Any
 
 from app.schemas import ForecastResponse, OrderRecommendationResponse
+from app.services.embedding import HashEmbeddingService, cosine_similarity
+
+try:
+    from langchain_core.documents import Document as LangChainDocument
+except ImportError:
+    LangChainDocument = None
+
+
+@dataclass
+class FallbackDocument:
+    page_content: str
+    metadata: dict[str, Any]
+
+
+RagDocument = Any
+
+
+def build_langchain_chat_context(
+    question: str,
+    grounding: dict[str, Any] | None = None,
+    sales_history_rows: list[dict[str, str]] | None = None,
+    max_documents: int = 6,
+) -> tuple[str, list[str]]:
+    """Build local RAG context for the chatbot, using LangChain Document objects when available."""
+
+    documents: list[RagDocument] = []
+    if grounding:
+        documents.extend(_documents_from_grounding(grounding))
+    if sales_history_rows:
+        documents.extend(_documents_from_sales_rows(sales_history_rows))
+
+    if not documents:
+        return "사용 가능한 RAG 근거가 없습니다.", ["ai_server:empty_rag_context"]
+
+    selected = _select_relevant_documents(question, documents, max_documents)
+    context = "\n\n---\n\n".join(_document_content(document) for document in selected)
+    sources = [_document_source(document) for document in selected]
+    return context, sources
 
 
 def build_order_rag_context(
@@ -49,6 +88,66 @@ def build_order_rag_context(
 
     context = "\n\n---\n\n".join(blocks)
     return context, sources
+
+
+def _documents_from_grounding(grounding: dict[str, Any]) -> list[RagDocument]:
+    documents = []
+    for key, value in grounding.items():
+        if key == "sources":
+            continue
+        content = f"{key}: {value}"
+        documents.append(_make_document(content, {"source": f"backend_grounding:{key}", "kind": "grounding"}))
+    if not documents:
+        documents.append(
+            _make_document(str(grounding), {"source": "backend_grounding", "kind": "grounding"})
+        )
+    return documents
+
+
+def _documents_from_sales_rows(rows: list[dict[str, str]]) -> list[RagDocument]:
+    documents = []
+    for row in rows[-300:]:
+        item = row.get("품목") or row.get("품목명") or row.get("itemName") or "unknown_item"
+        date = row.get("날짜") or row.get("date") or "unknown_date"
+        content = "\n".join(f"{key}: {value}" for key, value in row.items() if value not in ["", None])
+        documents.append(
+            _make_document(
+                content,
+                {
+                    "source": f"sales_history:{item}:{date}",
+                    "kind": "sales_history",
+                    "item": item,
+                    "date": date,
+                },
+            )
+        )
+    return documents
+
+
+def _make_document(content: str, metadata: dict[str, Any]) -> RagDocument:
+    if LangChainDocument is not None:
+        return LangChainDocument(page_content=content, metadata=metadata)
+    return FallbackDocument(page_content=content, metadata=metadata)
+
+
+def _select_relevant_documents(question: str, documents: list[RagDocument], limit: int) -> list[RagDocument]:
+    embedding_service = HashEmbeddingService()
+    question_embedding = embedding_service.embed(question)
+    scored = [
+        (cosine_similarity(question_embedding, embedding_service.embed(_document_content(document))), document)
+        for document in documents
+    ]
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [document for _score, document in scored[:limit]]
+
+
+def _document_content(document: RagDocument) -> str:
+    return str(document.page_content)
+
+
+def _document_source(document: RagDocument) -> str:
+    metadata = getattr(document, "metadata", {}) or {}
+    return str(metadata.get("source", "ai_server_rag"))
 
 
 def _latest_inventory_rows(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:

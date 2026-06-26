@@ -136,7 +136,8 @@ class ChatMessage(BaseModel):
 class ChatbotRequest(BaseModel):
     question: str
     locale: str = "ko"
-    grounding: dict[str, Any]
+    grounding: dict[str, Any] = Field(default_factory=dict)
+    sales_history: SalesHistory | None = Field(default=None, alias="salesHistory")
     history: list[ChatMessage] = Field(default_factory=list)
 
 

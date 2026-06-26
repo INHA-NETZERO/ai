@@ -267,8 +267,39 @@ def test_v1_chat_returns_grounded_answer_and_semantic_cache_hit() -> None:
     assert second.status_code == 200
     assert first.json()["cacheHit"] is False
     assert second.json()["cacheHit"] is True
-    assert second.json()["sources"] == ["backend:closing-result"]
+    assert second.json()["sources"]
     assert second.json()["tokens"] >= 1
+
+
+def test_v1_chat_builds_ai_server_rag_from_presigned_sales_csv(monkeypatch) -> None:
+    csv_text = (
+        "날짜,요일,날씨,기온,강수mm,행사중여부,공휴일여부,신메뉴여부,품목,구분,수요,판매수량,매진여부,매진시각,비고_시나리오\n"
+        "2026-06-01,월,맑음,22.0,0,False,False,False,우유,완제품,10,10,False,,normal\n"
+    )
+
+    class FakeHttpResponse:
+        text = csv_text
+
+        def raise_for_status(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.services.v1_contract.httpx.get", lambda url, timeout: FakeHttpResponse())
+    payload = {
+        "question": f"우유 최근 판매 근거 알려줘 {uuid4()}",
+        "locale": "ko",
+        "salesHistory": {
+            "presignedUrls": ["https://bucket.s3.ap-northeast-2.amazonaws.com/sales.csv?sig=test"],
+            "format": "sales_csv_v1",
+        },
+    }
+
+    with TestClient(app) as client:
+        response = client.post("/v1/chat", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sources"] == ["sales_history:우유:2026-06-01"]
+    assert body["cacheHit"] is False
 
 
 def test_v1_validation_errors_use_contract_shape() -> None:

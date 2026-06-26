@@ -33,6 +33,7 @@ from app.services.demand_model import (
     _training_row_features,
 )
 from app.services.llm import LocalLlamaClient
+from app.services.rag import build_langchain_chat_context
 from app.services.semantic_cache import ChatSemanticCache
 
 
@@ -156,9 +157,14 @@ def generate_chatbot_answer(
     llm_client: LocalLlamaClient | None,
 ) -> ChatbotResponse:
     start = time.perf_counter()
-    grounding_text = _stable_grounding_text(request.grounding)
-    grounding_hash = hashlib.sha256(grounding_text.encode("utf-8")).hexdigest()
-    namespace = f"v1:chat:{request.locale}:{grounding_hash}"
+    sales_history_rows = _load_sales_history(request.sales_history.presigned_urls) if request.sales_history else []
+    rag_context, sources = build_langchain_chat_context(
+        question=request.question,
+        grounding=request.grounding,
+        sales_history_rows=sales_history_rows,
+    )
+    rag_hash = hashlib.sha256(rag_context.encode("utf-8")).hexdigest()
+    namespace = f"v1:chat:{request.locale}:{rag_hash}"
     cached = semantic_cache.get(namespace, request.question)
     if cached is not None:
         response, _score = cached
@@ -170,15 +176,14 @@ def generate_chatbot_answer(
             tokens=int(response.get("tokens", 0)),
         )
 
-    sources = _grounding_sources(request.grounding)
     answer = _fallback_grounded_answer(request)
     if llm_client is not None:
         try:
             answer = llm_client.generate_text(
-                prompt=_chatbot_prompt(request),
+                prompt=_chatbot_prompt(request, rag_context),
                 system_prompt=(
                     "You are a Korean ordering assistant chatbot. "
-                    "Use only the provided backend grounding and chat history. "
+                    "Use only the RAG context prepared inside the AI server and the chat history. "
                     "Do not invent, change, or recalculate numbers. "
                     "Answer naturally in Korean."
                 ),
@@ -425,14 +430,14 @@ def _generate_prompt(request: GenerateRequest) -> str:
     )
 
 
-def _chatbot_prompt(request: ChatbotRequest) -> str:
+def _chatbot_prompt(request: ChatbotRequest, rag_context: str) -> str:
     history = "\n".join(f"{message.role}: {message.content}" for message in request.history[-6:])
     return (
         f"질문: {request.question}\n"
         f"언어: {request.locale}\n"
         f"이전 대화:\n{history or '없음'}\n"
-        f"백엔드 근거:\n{_stable_grounding_text(request.grounding)}\n"
-        "백엔드 근거에 있는 사실과 숫자만 사용해서 점주가 이해하기 쉽게 답하세요."
+        f"AI 서버 RAG 근거:\n{rag_context}\n"
+        "RAG 근거에 있는 사실과 숫자만 사용해서 점주가 이해하기 쉽게 답하세요."
     )
 
 
@@ -458,13 +463,6 @@ def _fallback_grounded_answer(request: GenerateRequest | ChatbotRequest) -> str:
     if potential is not None:
         parts.append(f"제공된 잠재 탄소 절감량은 {potential}kgCO2e입니다.")
     return " ".join(parts)
-
-
-def _grounding_sources(grounding: dict[str, Any]) -> list[str]:
-    sources = grounding.get("sources")
-    if isinstance(sources, list) and all(isinstance(source, str) for source in sources):
-        return sources
-    return ["backend_grounding"]
 
 
 def _stable_grounding_text(grounding: dict[str, Any]) -> str:

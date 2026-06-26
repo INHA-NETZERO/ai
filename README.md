@@ -8,7 +8,7 @@
 - Redis: deterministic 계산 결과용 exact cache. `REDIS_URL`이 없거나 Redis가 꺼져 있으면 인메모리 캐시 사용
 - sqlite-vec: Llama 챗봇 전용 semantic cache
 - Local Llama: Ollama의 `llama3.2:1b` 또는 Hugging Face `meta-llama/Llama-3.2-1B-Instruct`로 LLM 설명과 챗봇 답변 생성
-- 경량 RAG: 백엔드가 넘긴 POS 마감, 발주정책, 예측/추천 grounding을 챗봇 context로 사용
+- LangChain RAG: AI 서버가 백엔드 presigned CSV와 grounding을 LangChain Document로 구성하고, 질문 관련 context를 검색해 챗봇에 전달
 - 예측/발주 엔진: LightGBM 수요 예측, base-stock/OR-Tools 발주 정책
 
 ## 현재 구현 기준
@@ -30,7 +30,7 @@ curl -s http://127.0.0.1:8000/integration-status | python -m json.tool
 ## 로컬 Llama 설정
 
 `/v1/generate`, `/v1/chat`, 로컬 데모용 `/chat`은 모두 `app/services/llm.py`의 `LocalLlamaClient`를 사용합니다.
-즉, LLM 설명과 챗봇은 같은 로컬 Llama 호출 코드 경로를 탑니다. `/daily-close`는 백엔드 책임으로 이동했기 때문에 AI 서버에서 제공하지 않습니다.
+즉, LLM 설명과 챗봇은 같은 로컬 Llama 호출 코드 경로를 탑니다. `/v1/chat`의 RAG/LangChain context 구성도 AI 서버에서 수행합니다. `/daily-close`는 백엔드 책임으로 이동했기 때문에 AI 서버에서 제공하지 않습니다.
 
 기본 방식은 Ollama입니다.
 
@@ -309,7 +309,7 @@ curl -X POST http://127.0.0.1:8000/v1/generate \
   }'
 ```
 
-백엔드 grounding 기반 챗봇:
+AI 서버 RAG/LangChain 기반 챗봇:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/chat \
@@ -357,7 +357,7 @@ Spring 백엔드가 붙는 API는 아래 네 개입니다. `/daily-close`는 백
 | `POST` | `/v1/order-recommendation` | 발주 커버기간 일별 p10/p50/p90 수요예측 |
 | `POST` | `/v1/forecast` | 다음날 단일일 p10/p50/p90 수요예측 |
 | `POST` | `/v1/generate` | 백엔드 grounding 기반 자연어 설명 |
-| `POST` | `/v1/chat` | 백엔드 grounding 기반 점주 챗봇 |
+| `POST` | `/v1/chat` | AI 서버 RAG/LangChain 기반 점주 챗봇 |
 
 `/v1` API는 상태 없는 서비스로 동작합니다. DB를 직접 읽지 않고, 요청 body와 `salesHistory.presignedUrls`로 받은 CSV만 사용합니다.
 
@@ -469,7 +469,7 @@ Spring 백엔드가 붙는 API는 아래 네 개입니다. `/daily-close`는 백
 
 #### `POST /v1/chat`
 
-백엔드가 만든 grounding과 선택적인 대화 history를 바탕으로 점주 질문에 답합니다. 이 엔드포인트는 유사 질문 재사용을 위해 semantic cache를 사용합니다. 답변은 백엔드가 넘긴 grounding 안에서만 생성합니다.
+AI 서버가 `salesHistory.presignedUrls`로 받은 CSV와 선택적인 grounding을 RAG 문서로 만들고, 질문과 관련된 context를 검색한 뒤 로컬 Llama로 답변합니다. LangChain이 설치되어 있으면 `langchain_core.documents.Document`를 사용하고, 설치되지 않은 개발 환경에서는 같은 구조의 fallback 문서로 동작합니다. 이 엔드포인트는 유사 질문 재사용을 위해 semantic cache를 사용합니다.
 
 요청 예시:
 
@@ -483,6 +483,10 @@ Spring 백엔드가 붙는 API는 아래 네 개입니다. `/daily-close`는 백
     "recommendation": { "recommendedQuantity": 66 },
     "sources": ["backend:closing-result"]
   },
+  "salesHistory": {
+    "presignedUrls": ["https://example.com/sales.csv?..."],
+    "format": "sales_csv_v1"
+  },
   "history": [
     { "role": "user", "content": "우유 발주 추천 설명해줘" },
     { "role": "assistant", "content": "우유는 66L 발주를 권장합니다." }
@@ -495,7 +499,7 @@ Spring 백엔드가 붙는 API는 아래 네 개입니다. `/daily-close`는 백
 ```json
 {
   "answer": "제공된 수요 중앙값과 추천 발주량 기준으로 보면 우유는 결품 위험을 낮추기 위한 보충 발주로 볼 수 있습니다.",
-  "sources": ["backend:closing-result"],
+  "sources": ["backend_grounding:recommendation", "sales_history:우유:2026-06-01"],
   "cacheHit": false,
   "latencyMs": 18,
   "tokens": 168
@@ -653,7 +657,7 @@ S3 POS 마감 CSV
 
 ### `POST /chat`
 
-로컬 데모 CSV를 읽어서 점주 질문에 답하는 개발용 챗봇입니다. 운영 연동에서는 백엔드 grounding을 받는 `/v1/chat`을 사용합니다.
+로컬 데모 CSV를 읽어서 점주 질문에 답하는 개발용 챗봇입니다. 운영 연동에서는 AI 서버가 RAG/LangChain context를 구성하는 `/v1/chat`을 사용합니다.
 
 요청 예시:
 
