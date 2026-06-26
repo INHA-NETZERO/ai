@@ -62,20 +62,20 @@ def train_lightgbm_model(
     model_path: Path = DEFAULT_MODEL_PATH,
     metadata_path: Path = DEFAULT_METADATA_PATH,
 ) -> dict[str, Any]:
-    rows = _load_inventory_rows(inventory_paths)
     item_master = _read_csv(item_master_path)
     order_policy = [
         row for row in _read_csv(order_policy_path)
         if VALID_ITEM_ID_PATTERN.match(row.get("품목ID", ""))
     ]
     metadata = _build_metadata(item_master, order_policy)
-    features, targets = _build_training_matrix(rows, metadata)
+    features, targets = _build_training_matrix_from_paths(inventory_paths, metadata)
     if len(targets) < 10:
         raise ValueError("Need at least 10 training examples to train the saved demand model")
 
     import lightgbm as lgb
 
-    dataset = lgb.Dataset(features, label=targets, feature_name=FEATURE_NAMES, free_raw_data=False)
+    train_features, train_targets, valid_features, valid_targets = _train_validation_split(features, targets)
+    dataset = lgb.Dataset(train_features, label=train_targets, feature_name=FEATURE_NAMES, free_raw_data=False)
     model = lgb.train(
         {
             "objective": "regression",
@@ -90,17 +90,22 @@ def train_lightgbm_model(
         dataset,
         num_boost_round=120,
     )
+    evaluation = _evaluate_model(model, valid_features, valid_targets)
 
     model_path.parent.mkdir(parents=True, exist_ok=True)
     model.save_model(str(model_path))
     metadata["feature_names"] = FEATURE_NAMES
     metadata["training_examples"] = int(len(targets))
+    metadata["train_examples"] = int(len(train_targets))
+    metadata["validation_examples"] = int(len(valid_targets))
+    metadata["evaluation"] = evaluation
     metadata["inventory_files"] = [str(path) for path in inventory_paths]
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "model_path": str(model_path),
         "metadata_path": str(metadata_path),
         "training_examples": int(len(targets)),
+        "evaluation": evaluation,
         "features": len(FEATURE_NAMES),
     }
 
@@ -172,6 +177,19 @@ def _load_inventory_rows(paths: list[Path]) -> list[dict[str, str]]:
     return rows
 
 
+def _build_training_matrix_from_paths(paths: list[Path], metadata: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    feature_chunks = []
+    target_chunks = []
+    for path in paths:
+        features, targets = _build_training_matrix(_load_inventory_rows([path]), metadata)
+        if len(targets):
+            feature_chunks.append(features)
+            target_chunks.append(targets)
+    if not target_chunks:
+        return np.empty((0, len(FEATURE_NAMES))), np.empty((0,))
+    return np.vstack(feature_chunks), np.concatenate(target_chunks)
+
+
 def _build_metadata(item_master: list[dict[str, str]], order_policy: list[dict[str, str]]) -> dict[str, Any]:
     item_by_name = {row["품목명"]: row for row in item_master}
     policy_by_name = {
@@ -215,6 +233,39 @@ def _build_training_matrix(rows: list[dict[str, str]], metadata: dict[str, Any])
             features.append(_row_features(row, demands, metadata))
             targets.append(next_demand)
     return np.array(features, dtype=np.float64), np.array(targets, dtype=np.float64)
+
+
+def _train_validation_split(
+    features: np.ndarray,
+    targets: np.ndarray,
+    validation_ratio: float = 0.2,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    validation_size = max(1, int(len(targets) * validation_ratio))
+    if len(targets) - validation_size < 5:
+        validation_size = max(1, len(targets) - 5)
+    split_at = len(targets) - validation_size
+    return (
+        features[:split_at],
+        targets[:split_at],
+        features[split_at:],
+        targets[split_at:],
+    )
+
+
+def _evaluate_model(model: Any, features: np.ndarray, targets: np.ndarray) -> dict[str, float]:
+    if len(targets) == 0:
+        return {"mae": 0.0, "rmse": 0.0, "mape": 0.0}
+    predictions = np.maximum(0.0, model.predict(features))
+    errors = predictions - targets
+    mae = float(np.mean(np.abs(errors)))
+    rmse = float(np.sqrt(np.mean(errors**2)))
+    nonzero = targets != 0
+    mape = float(np.mean(np.abs(errors[nonzero] / targets[nonzero])) * 100) if np.any(nonzero) else 0.0
+    return {
+        "mae": round(mae, 4),
+        "rmse": round(rmse, 4),
+        "mape": round(mape, 4),
+    }
 
 
 def _group_training_rows(rows: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:

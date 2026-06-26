@@ -44,6 +44,9 @@ def main() -> None:
         "trained demand model: "
         f"{result['training_examples']} examples, "
         f"{result['features']} features, "
+        f"MAE={result['evaluation']['mae']}, "
+        f"RMSE={result['evaluation']['rmse']}, "
+        f"MAPE={result['evaluation']['mape']}%, "
         f"model={result['model_path']}, "
         f"metadata={result['metadata_path']}"
     )

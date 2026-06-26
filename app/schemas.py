@@ -72,4 +72,18 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
+    sources: list[str] = Field(default_factory=list)
     cache: CacheInfo = Field(default_factory=CacheInfo)
+
+
+class CacheStatusResponse(BaseModel):
+    exact_cache_backend: str
+    semantic_cache_backend: str
+    exact_hits: int
+    exact_misses: int
+    exact_hit_rate: float
+    semantic_hits: int
+    semantic_misses: int
+    semantic_hit_rate: float
+    estimated_bedrock_calls_saved: int
+    elasticache_compatible: bool = True

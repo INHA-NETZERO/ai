@@ -9,6 +9,7 @@ from app.core.config import Settings, get_settings
 from app.engines.deterministic import forecast_demand_from_closing_data, recommend_orders
 from app.schemas import (
     CacheInfo,
+    CacheStatusResponse,
     ChatRequest,
     ChatResponse,
     DailyCloseResponse,
@@ -18,6 +19,8 @@ from app.schemas import (
 from app.services.cache import ExactCache, cache_key
 from app.services.demo_data import build_order_request, closing_cache_payload, load_demo_closing_data
 from app.services.llm import BedrockLlamaClient
+from app.services.metrics import CacheMetrics
+from app.services.rag import build_order_rag_context
 from app.services.semantic_cache import ChatSemanticCache
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
@@ -29,6 +32,7 @@ class AppState:
         self.exact_cache = ExactCache(settings.redis_url)
         self.llm_client = _build_bedrock_client(settings)
         self.chat_semantic_cache: ChatSemanticCache | None = None
+        self.cache_metrics = CacheMetrics()
 
 
 def _build_bedrock_client(settings: Settings) -> BedrockLlamaClient | None:
@@ -55,6 +59,21 @@ def health() -> dict[str, str]:
         "llm_provider": settings.llm_provider,
         "bedrock_model_id": settings.bedrock_model_id,
     }
+
+
+@app.get("/cache-status", response_model=CacheStatusResponse)
+def cache_status() -> CacheStatusResponse:
+    state: AppState = app.state.runtime
+    semantic_backend = (
+        state.chat_semantic_cache.backend
+        if state.chat_semantic_cache is not None
+        else "sqlite_vec_or_sqlite"
+    )
+    return CacheStatusResponse(
+        exact_cache_backend=state.exact_cache.backend,
+        semantic_cache_backend=semantic_backend,
+        **state.cache_metrics.model_dump(),
+    )
 
 
 @app.post("/forecast", response_model=ForecastResponse)
@@ -108,13 +127,16 @@ def chat(request: ChatRequest) -> ChatResponse:
     cached = chat_semantic_cache.get(namespace, request.question)
     if cached is not None:
         response, score = cached
-        response["cache"] = CacheInfo(semantic_hit=True, semantic_score=score).model_dump()
-        return ChatResponse.model_validate(response)
+        if response.get("sources"):
+            state.cache_metrics.semantic_hits += 1
+            response["cache"] = CacheInfo(semantic_hit=True, semantic_score=score).model_dump()
+            return ChatResponse.model_validate(response)
+    state.cache_metrics.semantic_misses += 1
 
     forecast_response = forecast_demand_from_closing_data(data)
     order_response = recommend_orders(build_order_request(data, forecast_response.forecasts))
-    answer = _build_chat_answer(data, order_response, request.question)
-    response = ChatResponse(answer=answer).model_dump()
+    answer, sources = _build_chat_answer(data, forecast_response, order_response, request.question)
+    response = ChatResponse(answer=answer, sources=sources).model_dump()
     chat_semantic_cache.set(namespace, request.question, response)
     return ChatResponse.model_validate(response)
 
@@ -130,8 +152,10 @@ def _cached_response(
 
     exact = state.exact_cache.get(exact_key)
     if exact is not None:
+        state.cache_metrics.exact_hits += 1
         exact["cache"] = CacheInfo(exact_hit=True).model_dump()
         return response_model.model_validate(exact)
+    state.cache_metrics.exact_misses += 1
 
     response = factory().model_dump()
     response["cache"] = CacheInfo().model_dump()
@@ -168,17 +192,23 @@ def _build_llm_output(
         return _fallback_summary(data, order_response)
 
 
-def _build_chat_answer(data: dict[str, Any], order_response: OrderRecommendationResponse, question: str) -> str:
+def _build_chat_answer(
+    data: dict[str, Any],
+    forecast_response: ForecastResponse,
+    order_response: OrderRecommendationResponse,
+    question: str,
+) -> tuple[str, list[str]]:
     state: AppState = app.state.runtime
+    rag_context, sources = build_order_rag_context(data, forecast_response, order_response, question)
     prompt = (
         f"점주 질문: {question}\n"
         f"매장: {data['store_id']}\n"
         f"마감일: {data['business_date']}\n"
-        f"발주 추천: {order_response.model_dump_json(ensure_ascii=False)}\n"
-        "계산값은 바꾸지 말고 추천 근거만 짧게 설명해줘."
+        f"RAG 근거:\n{rag_context}\n"
+        "위 근거 안에서만 답하고, 계산값은 바꾸지 말고 추천 근거를 짧게 설명해줘."
     )
     if state.llm_client is None:
-        return _fallback_summary(data, order_response)
+        return _fallback_summary(data, order_response), sources
     try:
         return state.llm_client.generate_text(
             prompt=prompt,
@@ -189,9 +219,9 @@ def _build_chat_answer(data: dict[str, Any], order_response: OrderRecommendation
             ),
             max_tokens=400,
             temperature=0,
-        )
+        ), sources
     except Exception:
-        return _fallback_summary(data, order_response)
+        return _fallback_summary(data, order_response), sources
 
 
 def _summary_prompt(

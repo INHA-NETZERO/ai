@@ -32,6 +32,19 @@ def test_forecast_uses_exact_cache_without_payload() -> None:
     assert second.json()["cache"]["semantic_hit"] is False
 
 
+def test_cache_status_tracks_exact_cache() -> None:
+    with TestClient(app) as client:
+        client.post("/forecast")
+        client.post("/forecast")
+        response = client.get("/cache-status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["exact_cache_backend"] in {"memory", "redis_or_elasticache"}
+    assert body["elasticache_compatible"] is True
+    assert body["exact_hits"] >= 1
+
+
 def test_order_recommendation() -> None:
     with TestClient(app) as client:
         response = client.post("/order-recommendation")
@@ -63,6 +76,7 @@ def test_chat_is_the_only_semantic_cache_user() -> None:
     assert first.status_code == 200
     assert second.status_code == 200
     assert second.json()["cache"]["semantic_hit"] is True
+    assert second.json()["sources"]
 
 
 def test_csv_demo_data_columns_and_links_are_valid() -> None:

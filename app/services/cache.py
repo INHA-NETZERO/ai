@@ -52,6 +52,10 @@ class ExactCache:
             return
         self._memory[key] = (time.time() + self.ttl_seconds, value)
 
+    @property
+    def backend(self) -> str:
+        return "redis_or_elasticache" if self._client else "memory"
+
 
 def get_or_set(cache: ExactCache, key: str, factory: Callable[[], JsonValue]) -> tuple[JsonValue, bool]:
     cached = cache.get(key)

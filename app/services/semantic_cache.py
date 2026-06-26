@@ -33,3 +33,7 @@ class ChatSemanticCache:
                 metadata={"source": "low_power_chatbot", "payload": stable_json(payload)},
             )
         )
+
+    @property
+    def backend(self) -> str:
+        return "sqlite_vec_or_sqlite"
