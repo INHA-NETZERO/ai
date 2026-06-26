@@ -36,6 +36,10 @@ def main() -> None:
         default="app/data/predictions/test_order_recommendations.csv",
         help="Output .csv or .json path.",
     )
+    parser.add_argument(
+        "--report",
+        help="Optional Markdown report path. Defaults to <output stem>_report.md.",
+    )
     parser.add_argument("--limit", type=int, default=20)
     args = parser.parse_args()
 
@@ -63,13 +67,16 @@ def main() -> None:
     response = recommend_orders(order_request)
 
     rows = _build_output_rows(data["inventory_flow"], forecast.forecasts, response.model_dump()["recommendations"])
-    _write_output(Path(args.output), rows)
-
     summary = _summary(rows, forecast.method, response.method, data["business_date"], args.item_type)
-    print(json.dumps(summary, ensure_ascii=False))
-    print(f"wrote {len(rows)} order recommendation rows: {args.output}")
-    for row in rows[: max(0, args.limit)]:
-        print(json.dumps(row, ensure_ascii=False))
+    output_path = Path(args.output)
+    report_path = Path(args.report) if args.report else output_path.with_name(f"{output_path.stem}_report.md")
+    _write_output(output_path, rows)
+    _write_report(report_path, summary, rows)
+
+    print(_human_summary(summary))
+    print(f"상세 CSV 저장: {output_path}")
+    print(f"요약 리포트 저장: {report_path}")
+    print(_human_table(rows[: max(0, args.limit)]))
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -166,6 +173,102 @@ def _write_output(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(csv_file, fieldnames=list(rows[0]) if rows else [])
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _write_report(path: Path, summary: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = "\n".join(
+        [
+            "# 발주 추천 결과",
+            "",
+            _human_summary(summary),
+            "",
+            "## 품목별 추천",
+            "",
+            _markdown_table(rows),
+            "",
+            "## 산식",
+            "",
+            "- 추천 발주량 = max(0, base-stock level - 현재 가용재고)을 발주단위에 맞춰 올림한 값",
+            "- base-stock level = 예측 수요 + 안전재고",
+            "- 기존 발주 대비 = 추천 발주량 - 더미 데이터의 기존 발주량",
+            "",
+        ]
+    )
+    path.write_text(content, encoding="utf-8")
+
+
+def _human_summary(summary: dict[str, Any]) -> str:
+    item_filter = summary["item_type_filter"]
+    if isinstance(item_filter, list):
+        item_filter_text = ", ".join(item_filter)
+    else:
+        item_filter_text = str(item_filter)
+    return "\n".join(
+        [
+            f"마감일: {summary['business_date']}",
+            f"대상: {item_filter_text}",
+            f"예측 모델: {summary['forecast_method']}",
+            f"발주 정책: {summary['order_method']}",
+            f"발주 추천 품목: {summary['ordered_items']} / {summary['items']}개",
+            f"예측 수요 합계: {summary['total_forecast_demand']}",
+            f"추천 발주량 합계: {summary['total_recommended_quantity']}",
+            f"기존 발주량 합계: {summary['total_historical_order_quantity']}",
+            f"기존 대비 증감: {summary['total_recommendation_minus_historical']:+}",
+        ]
+    )
+
+
+def _human_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "품목별 추천 결과가 없습니다."
+    lines = [
+        "",
+        "품목별 추천",
+        _markdown_table(rows),
+    ]
+    return "\n".join(lines)
+
+
+def _markdown_table(rows: list[dict[str, Any]]) -> str:
+    headers = [
+        "품목",
+        "현재재고",
+        "최근수요",
+        "예측수요합계",
+        "추천발주",
+        "기존발주",
+        "증감",
+    ]
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
+    ]
+    for row in rows:
+        values = [
+            row["itemName"],
+            _format_number(row["current_stock"]),
+            _format_number(row["latest_demand"]),
+            _format_number(row["forecast_total"]),
+            _format_number(row["recommended_quantity"]),
+            _format_number(row["historical_order_quantity"]),
+            _format_signed(row["recommendation_minus_historical"]),
+        ]
+        lines.append("| " + " | ".join(values) + " |")
+    return "\n".join(lines)
+
+
+def _format_number(value: Any) -> str:
+    number = _to_float(value)
+    return str(int(number)) if number.is_integer() else f"{number:.3f}".rstrip("0").rstrip(".")
+
+
+def _format_signed(value: Any) -> str:
+    number = _to_float(value)
+    if number == 0:
+        return "0"
+    formatted = _format_number(abs(number))
+    return f"+{formatted}" if number > 0 else f"-{formatted}"
 
 
 if __name__ == "__main__":
