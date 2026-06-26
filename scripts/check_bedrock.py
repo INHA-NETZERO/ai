@@ -9,10 +9,25 @@ from app.core.config import get_settings
 from app.services.llm import BedrockLlamaClient
 
 
+def has_aws_credential_settings() -> bool:
+    settings = get_settings()
+    return bool(
+        settings.aws_profile
+        or (settings.aws_access_key_id and settings.aws_secret_access_key)
+    )
+
+
 def main() -> None:
     settings = get_settings()
     auth_mode = "bedrock_api_key" if settings.bedrock_api_key else "aws_credentials"
     print(f"auth_mode={auth_mode}")
+
+    if not settings.bedrock_api_key and not has_aws_credential_settings():
+        raise SystemExit(
+            "No Bedrock credentials found. "
+            "Put BEDROCK_API_KEY=... in .env, not .env.example."
+        )
+
     client = BedrockLlamaClient(settings)
     answer = client.generate_text(
         prompt="한국어로 'Bedrock 연결 확인 완료'라고만 답해줘.",
