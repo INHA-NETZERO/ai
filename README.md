@@ -123,6 +123,23 @@ presigned URL 다운로드만 확인하려면 아래처럼 실행합니다.
 .venv/bin/python scripts/check_s3.py --url 'https://bucket.s3.ap-northeast-2.amazonaws.com/sales.csv?...'
 ```
 
+presigned URL을 받자마자 저장된 LightGBM 모델로 예측까지 실행하려면 아래 스크립트를 사용합니다.
+
+```bash
+.venv/bin/python scripts/predict_from_s3_url.py \
+  --url 'https://bucket.s3.ap-northeast-2.amazonaws.com/sales.csv?...' \
+  --days 2 \
+  --output app/data/predictions/s3_url_forecast.json
+```
+
+URL 없이 로컬 CSV로 같은 흐름을 미리 테스트하려면 `--input`을 사용합니다.
+
+```bash
+.venv/bin/python scripts/predict_from_s3_url.py \
+  --input app/data/Test/sales_demo_1y.csv \
+  --days 2
+```
+
 기존 데모 API(`/forecast`, `/order-recommendation`, `/daily-close`, `/chat`)가 로컬 CSV 대신 S3 CSV를 직접 읽게 하려면 `.env`를 아래처럼 설정합니다.
 
 ```text
