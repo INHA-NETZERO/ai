@@ -54,7 +54,15 @@ class ExactCache:
 
     @property
     def backend(self) -> str:
-        return "redis_or_elasticache" if self._client else "memory"
+        if self._client is None:
+            return "memory"
+        return "elasticache_redis" if _looks_like_elasticache(self._client) else "redis"
+
+
+def _looks_like_elasticache(client: redis.Redis) -> bool:
+    connection_kwargs = getattr(client.connection_pool, "connection_kwargs", {})
+    host = str(connection_kwargs.get("host", ""))
+    return "cache.amazonaws.com" in host or "clustercfg" in host
 
 
 def get_or_set(cache: ExactCache, key: str, factory: Callable[[], JsonValue]) -> tuple[JsonValue, bool]:

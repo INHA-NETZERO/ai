@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -87,3 +87,4 @@ class CacheStatusResponse(BaseModel):
     semantic_hit_rate: float
     estimated_bedrock_calls_saved: int
     elasticache_compatible: bool = True
+    aws_elasticache: dict[str, Any] | None = None

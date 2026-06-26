@@ -17,6 +17,7 @@ from app.schemas import (
     OrderRecommendationResponse,
 )
 from app.services.cache import ExactCache, cache_key
+from app.services.aws_metrics import AwsMetricsClient
 from app.services.demo_data import build_order_request, closing_cache_payload, load_demo_closing_data
 from app.services.llm import BedrockLlamaClient
 from app.services.metrics import CacheMetrics
@@ -33,11 +34,21 @@ class AppState:
         self.llm_client = _build_bedrock_client(settings)
         self.chat_semantic_cache: ChatSemanticCache | None = None
         self.cache_metrics = CacheMetrics()
+        self.aws_metrics_client = _build_aws_metrics_client(settings)
 
 
 def _build_bedrock_client(settings: Settings) -> BedrockLlamaClient | None:
     try:
         return BedrockLlamaClient(settings.aws_region, settings.bedrock_model_id)
+    except Exception:
+        return None
+
+
+def _build_aws_metrics_client(settings: Settings) -> AwsMetricsClient | None:
+    if not settings.elasticache_replication_group_id and not settings.elasticache_cache_cluster_id:
+        return None
+    try:
+        return AwsMetricsClient(settings)
     except Exception:
         return None
 
@@ -72,6 +83,11 @@ def cache_status() -> CacheStatusResponse:
     return CacheStatusResponse(
         exact_cache_backend=state.exact_cache.backend,
         semantic_cache_backend=semantic_backend,
+        aws_elasticache=(
+            state.aws_metrics_client.get_elasticache_metrics()
+            if state.aws_metrics_client is not None
+            else None
+        ),
         **state.cache_metrics.model_dump(),
     )
 

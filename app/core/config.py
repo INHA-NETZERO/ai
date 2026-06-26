@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     llm_provider: str = "bedrock"
     aws_region: str = "us-east-1"
     bedrock_model_id: str = "meta.llama3-2-1b-instruct-v1:0"
+    elasticache_replication_group_id: str | None = None
+    elasticache_cache_cluster_id: str | None = None
+    aws_metrics_window_minutes: int = 5
     vector_db_path: Path = Path(".cache/vector_cache.sqlite3")
     semantic_cache_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
 
