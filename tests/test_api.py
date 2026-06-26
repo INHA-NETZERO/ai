@@ -139,6 +139,50 @@ def test_v1_forecast_returns_single_day_quantiles() -> None:
     assert prediction["p10"] <= prediction["p50"] <= prediction["p90"]
 
 
+def test_v1_forecast_downloads_backend_presigned_url(monkeypatch) -> None:
+    csv_text = (
+        "날짜,요일,날씨,기온,강수mm,행사,신메뉴,품목,구분,판매수량,비고_시나리오\n"
+        "2026-06-01,월,맑음,22.0,0,N,N,우유,완제품,10,normal\n"
+    )
+    calls = []
+
+    class FakeHttpResponse:
+        text = csv_text
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_get(url: str, timeout: float):
+        calls.append((url, timeout))
+        return FakeHttpResponse()
+
+    monkeypatch.setattr("app.services.v1_contract.httpx.get", fake_get)
+    payload = {
+        "storeId": 1,
+        "targetDate": "2026-06-28",
+        "salesHistory": {
+            "presignedUrls": ["https://bucket.s3.ap-northeast-2.amazonaws.com/sales.csv?X-Amz-Signature=test"],
+            "format": "sales_csv_v1",
+        },
+        "weather": {
+            "forecastDate": "2026-06-28",
+            "avgTemp": 21.2,
+            "precipitationMm": 12.0,
+            "precipitationProb": 80,
+            "skyCode": 4,
+        },
+        "rows": [
+            {"itemId": 101, "features": {"dayOfWeek": 6, "isHoliday": False, "ma7": 9.4, "trend": -0.3}}
+        ],
+    }
+
+    with TestClient(app) as client:
+        response = client.post("/v1/forecast", json=payload)
+
+    assert response.status_code == 200
+    assert calls == [("https://bucket.s3.ap-northeast-2.amazonaws.com/sales.csv?X-Amz-Signature=test", 3.0)]
+
+
 def test_v1_generate_returns_required_metrics_and_cache_hit() -> None:
     question = f"내일 우유 얼마나 시켜요? {uuid4()}"
     payload = {

@@ -34,6 +34,8 @@ def build_integration_status(
         },
         "data_source": {
             "active": settings.data_source,
+            "v1_presigned_url_loader_implemented": True,
+            "v1_presigned_urls_require_aws_credentials": False,
             "local_csv_active": settings.data_source == "local",
             "s3_active": settings.data_source == "s3",
             "s3_configured": s3_configured,
