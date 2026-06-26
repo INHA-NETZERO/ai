@@ -88,3 +88,13 @@ class CacheStatusResponse(BaseModel):
     estimated_bedrock_calls_saved: int
     elasticache_compatible: bool = True
     aws_elasticache: dict[str, Any] | None = None
+
+
+class IntegrationStatusResponse(BaseModel):
+    environment: str
+    aws: dict[str, Any]
+    llm: dict[str, Any]
+    data_source: dict[str, Any]
+    cache: dict[str, Any]
+    model: dict[str, Any]
+    gaps: list[str] = Field(default_factory=list)

@@ -14,6 +14,7 @@ from app.schemas import (
     ChatResponse,
     DailyCloseResponse,
     ForecastResponse,
+    IntegrationStatusResponse,
     OrderRecommendationResponse,
 )
 from app.services.cache import ExactCache, cache_key
@@ -23,6 +24,7 @@ from app.services.llm import BedrockLlamaClient
 from app.services.metrics import CacheMetrics
 from app.services.rag import build_order_rag_context
 from app.services.semantic_cache import ChatSemanticCache
+from app.services.integration_status import build_integration_status
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
@@ -63,12 +65,23 @@ app = FastAPI(title=get_settings().app_name, version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+def health() -> dict[str, Any]:
     settings = get_settings()
+    runtime = getattr(app.state, "runtime", None)
+    exact_backend = runtime.exact_cache.backend if runtime is not None else "unknown"
+    semantic_backend = (
+        runtime.chat_semantic_cache.backend
+        if runtime is not None and runtime.chat_semantic_cache is not None
+        else "sqlite_vec_or_sqlite"
+    )
+    status = build_integration_status(settings, exact_backend, semantic_backend)
     return {
         "status": "ok",
         "llm_provider": settings.llm_provider,
         "bedrock_model_id": settings.bedrock_model_id,
+        "actual_bedrock_call_ready": status["llm"]["actual_bedrock_call_ready"],
+        "data_source": status["data_source"]["active"],
+        "gaps": status["gaps"],
     }
 
 
@@ -89,6 +102,23 @@ def cache_status() -> CacheStatusResponse:
             else None
         ),
         **state.cache_metrics.model_dump(),
+    )
+
+
+@app.get("/integration-status", response_model=IntegrationStatusResponse)
+def integration_status() -> IntegrationStatusResponse:
+    state: AppState = app.state.runtime
+    semantic_backend = (
+        state.chat_semantic_cache.backend
+        if state.chat_semantic_cache is not None
+        else "sqlite_vec_or_sqlite"
+    )
+    return IntegrationStatusResponse.model_validate(
+        build_integration_status(
+            state.settings,
+            state.exact_cache.backend,
+            semantic_backend,
+        )
     )
 
 

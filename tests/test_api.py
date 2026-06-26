@@ -45,6 +45,18 @@ def test_cache_status_tracks_exact_cache() -> None:
     assert body["exact_hits"] >= 1
 
 
+def test_integration_status_reports_runtime_gaps() -> None:
+    with TestClient(app) as client:
+        response = client.get("/integration-status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "aws" in body
+    assert "actual_bedrock_call_ready" in body["llm"]
+    assert body["data_source"]["active"] in {"local", "s3"}
+    assert isinstance(body["gaps"], list)
+
+
 def test_order_recommendation() -> None:
     with TestClient(app) as client:
         response = client.post("/order-recommendation")

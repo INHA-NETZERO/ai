@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     app_name: str = "Net-Zero AI Server"
     environment: str = "local"
     redis_url: str | None = None
+    data_source: str = "local"
+    s3_bucket: str | None = None
+    s3_prefix: str = ""
     llm_provider: str = "bedrock"
     aws_region: str = "us-east-1"
     bedrock_model_id: str = "meta.llama3-2-1b-instruct-v1:0"
