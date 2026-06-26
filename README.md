@@ -140,6 +140,17 @@ URL 없이 로컬 CSV로 같은 흐름을 미리 테스트하려면 `--input`을
   --days 2
 ```
 
+Test 마감/재고흐름 CSV에서 수요예측과 발주 추천량까지 한 번에 뽑으려면 아래 스크립트를 사용합니다.
+
+```bash
+.venv/bin/python scripts/recommend_orders_from_csv.py \
+  --inventory-flow app/data/Test/inventory_demo_1y.csv \
+  --item-type 완제품 \
+  --output app/data/predictions/test_order_recommendations_finished_goods.csv
+```
+
+출력에는 품목별 현재재고, 결품, 예측수요 합계, base-stock level, 추천 발주량, 실제 더미 발주량 대비 차이가 포함됩니다.
+
 기존 데모 API(`/forecast`, `/order-recommendation`, `/daily-close`, `/chat`)가 로컬 CSV 대신 S3 CSV를 직접 읽게 하려면 `.env`를 아래처럼 설정합니다.
 
 ```text
