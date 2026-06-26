@@ -68,6 +68,18 @@ Spring 백엔드가 S3 presigned URL을 넘겨주는 `/v1/forecast`, `/v1/order-
 .venv/bin/python scripts/check_bedrock.py
 ```
 
+제공받은 Bedrock API key를 터미널에 `export AWS_BEARER_TOKEN_BEDROCK=...`로 넣고,
+AWS 예시와 같은 최소 boto3 Converse 코드로만 확인하려면 아래 스크립트를 사용합니다.
+
+```bash
+export AWS_BEARER_TOKEN_BEDROCK=<받은 bedrock-api-key-... 값>
+export BEDROCK_MODEL_ID=meta.llama3-2-1b-instruct-v1:0
+.venv/bin/python scripts/check_bedrock_llama_converse.py
+```
+
+만약 계정이 regional inference profile만 허용하면 `BEDROCK_MODEL_ID`를
+`us.meta.llama3-2-1b-instruct-v1:0`로 바꿔서 실행합니다.
+
 정상 연결이면 짧은 한국어 응답이 출력됩니다. `403 Forbidden`이 나오면 AI 서버 코드는 AWS까지 도달한 상태이고, API key 유효성, Bedrock 모델 액세스, 리전, 해당 모델 호출 권한을 AWS 콘솔에서 확인해야 합니다.
 
 ## ElastiCache 설정
