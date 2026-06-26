@@ -78,9 +78,11 @@ app/models/demand_lgbm_metadata.json
 
 FastAPI 서버는 위 모델 파일이 있으면 자동으로 로드합니다. 모델 파일이 없으면 서버 내부의 가벼운 fallback 예측 경로를 사용합니다.
 
-## 데이터 파일
+## POS 마감 데이터 흐름
 
-deterministic API는 별도 요청 payload를 받지 않고, `app/data/` 아래의 POS 마감 CSV 파일을 읽습니다.
+운영 환경에서는 POS 하루 마감 CSV를 S3에 적재하고, 서버가 해당 CSV를 내려받아 학습된 LightGBM 모델로 수요를 예측하는 흐름을 사용합니다. API 요청에서 예측용 payload를 직접 넘기지 않습니다.
+
+현재 레포의 `app/data/` 파일은 로컬 개발과 테스트를 위한 샘플 CSV입니다. 운영 S3 CSV도 아래와 같은 스키마를 맞추면 같은 전처리/예측 파이프라인을 사용할 수 있습니다.
 
 - `inventory_flow_5days.csv`: 일자별 재고 흐름, 수요, 실판매, 결품, 폐기, 기말재고
 - `item_master.csv`: 품목 ID, 품목명, 단위, 유통기한, ESG 관련 품목 메타데이터
@@ -120,15 +122,18 @@ curl -X POST http://127.0.0.1:8000/chat \
 
 ### `POST /forecast`
 
-로컬 POS 마감 CSV 파일을 기반으로 수요를 예측합니다. 요청 body는 필요 없습니다.
+S3에 적재된 POS 마감 CSV를 기반으로 수요를 예측하는 엔드포인트입니다. 요청 body는 필요 없습니다.
 
-사용 데이터:
+운영 데이터 흐름:
 
 ```text
-app/data/inventory_flow_5days.csv
-app/data/item_master.csv
-app/data/order_policy.csv
+S3 POS 마감 CSV
+-> 서버 전처리
+-> 저장된 LightGBM 모델 로드
+-> 품목별 수요 예측
 ```
+
+로컬 개발 환경에서는 같은 스키마의 샘플 CSV를 `app/data/`에서 읽습니다.
 
 응답 예시:
 
@@ -154,6 +159,7 @@ app/data/order_policy.csv
 
 - `app/models/demand_lgbm.txt`가 있으면 저장된 LightGBM 모델을 로드합니다.
 - 저장된 모델이 없으면 서버 내부 fallback 예측 경로를 사용합니다.
+- 운영 환경에서는 S3에서 가져온 POS 마감 CSV를 같은 스키마로 전처리해 예측합니다.
 - 수치 예측 API이므로 exact cache만 사용합니다.
 - LLM은 수요 예측에 사용하지 않습니다.
 
@@ -196,7 +202,8 @@ app/data/order_policy.csv
 처리 흐름:
 
 ```text
-CSV 마감 데이터
+S3 POS 마감 CSV
+-> 서버 전처리
 -> 저장된 LightGBM 수요 예측
 -> base-stock 발주 추천
 -> Bedrock Llama 설명 생성
