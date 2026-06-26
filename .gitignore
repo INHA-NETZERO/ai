@@ -165,6 +165,12 @@ app/models/*.json
 # Local/generated training CSV files
 app/data/training/*.csv
 
+# Local prediction/evaluation inputs and outputs
+app/data/inference/*.csv
+app/data/inference/*.json
+app/data/predictions/*.csv
+app/data/predictions/*.json
+
 # Spyder project settings
 .spyderproject
 .spyproject

@@ -145,6 +145,38 @@ overfit_gap
 
 대량 CSV 학습 시에는 파일들을 glob으로 한 번에 넘길 수 있습니다. 학습 전 모든 row를 날짜순으로 정렬한 뒤 시간순 holdout을 만들기 때문에, 미래 데이터를 train set에 섞는 방식보다 오버피팅과 데이터 누수를 더 조심스럽게 확인할 수 있습니다.
 
+## 로컬 새 데이터셋 예측/평가
+
+학습된 모델을 다시 학습하지 않고, 새 CSV에 바로 적용하려면 아래 스크립트를 사용합니다.
+
+```bash
+.venv/bin/python scripts/predict_lightgbm.py --input app/data/inference/new_sales.csv
+```
+
+입력 CSV가 학습 스키마와 같은 판매 데이터이고 `판매수량`이 있으면 `sales` 모드로 동작합니다. 실제 판매수량과 예측 판매수량을 비교해서 MAE, RMSE, MAPE를 출력합니다.
+
+```text
+날짜,요일,날씨,기온,강수mm,행사,공휴일,신메뉴,품목,구분,판매수량,비고_시나리오
+```
+
+POS 마감/재고흐름 CSV처럼 `판매수량` 정답이 없는 파일은 `closing` 모드로 예측만 수행합니다.
+
+```bash
+.venv/bin/python scripts/predict_lightgbm.py \
+  --mode closing \
+  --input app/data/inference/new_inventory_flow.csv
+```
+
+예측 결과 전체를 파일로 저장하려면 `--output`을 사용합니다.
+
+```bash
+.venv/bin/python scripts/predict_lightgbm.py \
+  --input app/data/inference/new_sales.csv \
+  --output app/data/predictions/new_sales_predictions.csv
+```
+
+`app/data/inference/`, `app/data/predictions/`의 CSV/JSON 파일은 로컬 테스트용으로 `.gitignore` 처리되어 있습니다.
+
 ## POS 마감 데이터 흐름
 
 운영 환경에서는 POS 하루 마감 CSV를 S3에 적재하고, 서버가 해당 CSV를 내려받아 학습된 LightGBM 모델로 수요를 예측하는 흐름을 사용합니다. API 요청에서 예측용 payload를 직접 넘기지 않습니다.
