@@ -40,6 +40,10 @@ FEATURE_NAMES = [
     "horizon_days",
     "safety_z",
     "unit_ef",
+    "lag_demand",
+    "lag_sales",
+    "lag_stockout_flag",
+    "lag_stockout_hour",
 ]
 SAFETY_Z = {
     "낮춤": 0.5,
@@ -53,14 +57,18 @@ TRAINING_COLUMNS = [
     "날씨",
     "기온",
     "강수mm",
-    "행사",
-    "공휴일",
-    "신메뉴",
+    "행사중여부",
+    "공휴일여부",
+    "신메뉴여부",
     "품목",
     "구분",
+    "수요",
     "판매수량",
+    "매진여부",
+    "매진시각",
     "비고_시나리오",
 ]
+TARGET_COLUMN = "수요"
 
 
 def train_lightgbm_model(
@@ -215,6 +223,9 @@ def _augment_metadata_from_training_paths(paths: list[Path], metadata: dict[str,
     type_values = set(metadata["type_codes"])
     temperatures = []
     rain_values = []
+    demand_values = []
+    sales_values = []
+    stockout_hours = []
 
     for path in paths:
         for row in _load_inventory_rows([path]):
@@ -225,6 +236,11 @@ def _augment_metadata_from_training_paths(paths: list[Path], metadata: dict[str,
             type_values.add(row["구분"])
             temperatures.append(_to_float(row["기온"]))
             rain_values.append(_to_float(row["강수mm"]))
+            demand_values.append(_to_float(row["수요"]))
+            sales_values.append(_to_float(row["판매수량"]))
+            stockout_hour = _stockout_hour(row.get("매진시각", ""))
+            if stockout_hour >= 0:
+                stockout_hours.append(stockout_hour)
 
     metadata["weekday_codes"] = _category_codes(weekdays)
     metadata["weather_codes"] = _category_codes(weather_values)
@@ -236,9 +252,13 @@ def _augment_metadata_from_training_paths(paths: list[Path], metadata: dict[str,
         "날씨": _mode(weather_values, "맑음"),
         "기온": round(float(mean(temperatures)), 3) if temperatures else 20.0,
         "강수mm": round(float(mean(rain_values)), 3) if rain_values else 0.0,
-        "행사": "N",
-        "공휴일": "N",
-        "신메뉴": "N",
+        "행사중여부": "False",
+        "공휴일여부": "False",
+        "신메뉴여부": "False",
+        "수요": round(float(mean(demand_values)), 3) if demand_values else 0.0,
+        "판매수량": round(float(mean(sales_values)), 3) if sales_values else 0.0,
+        "매진여부": "False",
+        "매진시각": round(float(mean(stockout_hours)), 3) if stockout_hours else -1.0,
         "비고_시나리오": _mode(scenario_values, "normal"),
     }
     return metadata
@@ -277,9 +297,11 @@ def _build_training_matrix(rows: list[dict[str, str]], metadata: dict[str, Any])
     features = []
     targets = []
     sorted_rows = sorted(rows, key=lambda row: (row["날짜"], row.get("_source_file", ""), row["품목"]))
+    previous_by_item: dict[str, dict[str, str]] = {}
     for row in sorted_rows:
-        features.append(_training_row_features(row, metadata))
-        targets.append(_to_float(row["판매수량"]))
+        features.append(_training_row_features(row, metadata, previous_by_item.get(row["품목"])))
+        targets.append(_to_float(row[TARGET_COLUMN]))
+        previous_by_item[row["품목"]] = row
     return np.array(features, dtype=np.float64), np.array(targets, dtype=np.float64)
 
 
@@ -336,11 +358,17 @@ def _overfit_gap(train_metrics: dict[str, float], test_metrics: dict[str, float]
     }
 
 
-def _training_row_features(row: dict[str, Any], metadata: dict[str, Any]) -> list[float]:
+def _training_row_features(
+    row: dict[str, Any],
+    metadata: dict[str, Any],
+    lag_row: dict[str, Any] | None = None,
+) -> list[float]:
     item = row["품목"]
     item_info = metadata["item_by_name"].get(item, {})
     policy = metadata["policy_by_name"].get(item, {})
     day = date.fromisoformat(row["날짜"])
+    lag_defaults = metadata.get("defaults", {})
+    lag = lag_row or {}
     return [
         float(day.toordinal()),
         float(day.month),
@@ -350,9 +378,9 @@ def _training_row_features(row: dict[str, Any], metadata: dict[str, Any]) -> lis
         _code(metadata["weather_codes"], row["날씨"]),
         _to_float(row["기온"]),
         _to_float(row["강수mm"]),
-        _binary_flag(row["행사"]),
-        _binary_flag(row["공휴일"]),
-        _binary_flag(row["신메뉴"]),
+        _binary_flag(row["행사중여부"]),
+        _binary_flag(row["공휴일여부"]),
+        _binary_flag(row["신메뉴여부"]),
         _code(metadata["item_codes"], item),
         _code(metadata["type_codes"], item_info.get("type") or row["구분"]),
         _code(metadata["scenario_codes"], row["비고_시나리오"]),
@@ -362,6 +390,10 @@ def _training_row_features(row: dict[str, Any], metadata: dict[str, Any]) -> lis
         _to_float(policy.get("horizon_days", 1)),
         _to_float(policy.get("safety_z", 1)),
         _to_float(item_info.get("unit_ef", 0)),
+        _to_float(lag.get("수요", lag_defaults.get("수요", 0.0))),
+        _to_float(lag.get("판매수량", lag_defaults.get("판매수량", 0.0))),
+        _binary_flag(lag.get("매진여부", lag_defaults.get("매진여부", "False"))),
+        _stockout_hour(lag.get("매진시각", lag_defaults.get("매진시각", -1.0))),
     ]
 
 
@@ -373,14 +405,14 @@ def _inference_features(row: dict[str, Any], target_date: date, metadata: dict[s
         "날씨": row.get("날씨", defaults.get("날씨", "맑음")),
         "기온": row.get("기온", defaults.get("기온", 20.0)),
         "강수mm": row.get("강수mm", defaults.get("강수mm", 0.0)),
-        "행사": row.get("행사", defaults.get("행사", "N")),
-        "공휴일": row.get("공휴일", defaults.get("공휴일", "N")),
-        "신메뉴": row.get("신메뉴", defaults.get("신메뉴", "N")),
+        "행사중여부": row.get("행사중여부", defaults.get("행사중여부", "False")),
+        "공휴일여부": row.get("공휴일여부", defaults.get("공휴일여부", "False")),
+        "신메뉴여부": row.get("신메뉴여부", defaults.get("신메뉴여부", "False")),
         "품목": row["품목"],
         "구분": row["구분"],
         "비고_시나리오": row.get("비고_시나리오", defaults.get("비고_시나리오", "normal")),
     }
-    return _training_row_features(training_like_row, metadata)
+    return _training_row_features(training_like_row, metadata, row)
 
 
 def _latest_rows_by_item(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
@@ -392,9 +424,9 @@ def _synthetic_next_row(row: dict[str, Any], prediction: float, next_date: date)
     next_row = dict(row)
     next_row["날짜"] = next_date.isoformat()
     next_row["수요"] = str(prediction)
-    next_row["실판매"] = str(prediction)
-    next_row["결품"] = "0"
-    next_row["폐기"] = "0"
+    next_row["판매수량"] = str(prediction)
+    next_row["매진여부"] = "False"
+    next_row["매진시각"] = ""
     return next_row
 
 
@@ -426,7 +458,29 @@ def _code(mapping: dict[str, int], value: str) -> float:
 
 
 def _binary_flag(value: str | int | float | bool) -> float:
-    return 1.0 if str(value).strip().upper() in {"Y", "1", "TRUE", "T"} else 0.0
+    return 1.0 if str(value).strip().upper() in {"Y", "1", "TRUE", "T", "YES"} else 0.0
+
+
+def _stockout_hour(value: str | int | float | None) -> float:
+    if value is None:
+        return -1.0
+    raw = str(value).strip()
+    if not raw:
+        return -1.0
+    try:
+        numeric = float(raw)
+        return numeric if numeric >= 0 else -1.0
+    except ValueError:
+        pass
+    if ":" in raw:
+        hour_text, minute_text, *_ = raw.split(":")
+        try:
+            hour = float(hour_text)
+            minute = float(minute_text)
+            return hour + minute / 60.0
+        except ValueError:
+            return -1.0
+    return -1.0
 
 
 def _korean_weekday(day: date) -> str:

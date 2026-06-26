@@ -124,7 +124,7 @@ DATA_SOURCE=s3
 AWS_REGION=ap-northeast-2
 S3_BUCKET=<bucket-name>
 S3_PREFIX=<optional/prefix>
-S3_INVENTORY_FLOW_KEY=inventory_flow_5days.csv
+S3_INVENTORY_FLOW_KEY=inventory_flow_5y.csv
 S3_ITEM_MASTER_KEY=item_master.csv
 S3_ORDER_POLICY_KEY=order_policy.csv
 STORE_ID=inha-store-001
@@ -133,7 +133,7 @@ STORE_ID=inha-store-001
 최종 S3 key는 `S3_PREFIX`와 각 key를 합쳐서 만듭니다. 예를 들어 `S3_PREFIX=stores/1/closing/2026-06-27`이면 아래 객체를 읽습니다.
 
 ```text
-s3://<bucket-name>/stores/1/closing/2026-06-27/inventory_flow_5days.csv
+s3://<bucket-name>/stores/1/closing/2026-06-27/inventory_flow_5y.csv
 s3://<bucket-name>/stores/1/closing/2026-06-27/item_master.csv
 s3://<bucket-name>/stores/1/closing/2026-06-27/order_policy.csv
 ```
@@ -173,7 +173,7 @@ app/data/training/
 학습 CSV 컬럼은 아래 순서와 이름을 정확히 맞춰야 합니다.
 
 ```text
-날짜,요일,날씨,기온,강수mm,행사,공휴일,신메뉴,품목,구분,판매수량,비고_시나리오
+날짜,요일,날씨,기온,강수mm,행사중여부,공휴일여부,신메뉴여부,품목,구분,수요,판매수량,매진여부,매진시각,비고_시나리오
 ```
 
 각 컬럼의 역할:
@@ -183,12 +183,15 @@ app/data/training/
 - `날씨`: 맑음, 흐림, 비 등
 - `기온`: 숫자형 기온
 - `강수mm`: 숫자형 강수량
-- `행사`: 행사 여부, `Y`/`N`
-- `공휴일`: 공휴일 여부, `Y`/`N`
-- `신메뉴`: 신메뉴 여부, `Y`/`N`
+- `행사중여부`: 행사 여부, `True`/`False` 또는 `Y`/`N`
+- `공휴일여부`: 공휴일 여부, `True`/`False` 또는 `Y`/`N`
+- `신메뉴여부`: 신메뉴 여부, `True`/`False` 또는 `Y`/`N`
 - `품목`: 품목명
 - `구분`: 완제품/원재료 등 품목 구분
-- `판매수량`: LightGBM 학습 target
+- `수요`: LightGBM 학습 target
+- `판매수량`: POS에서 실제 판매된 수량. 모델에는 같은 품목의 직전 마감 lag 피처로 들어갑니다.
+- `매진여부`: 해당 일자 매진 여부. 모델에는 직전 마감 lag 피처로 들어갑니다.
+- `매진시각`: 매진 시각. `14:30`, `14.5`, 빈 값 형식을 지원합니다.
 - `비고_시나리오`: 더미 생성 시나리오 설명
 
 그다음 학습 스크립트를 실행합니다.
@@ -229,10 +232,10 @@ overfit_gap
 .venv/bin/python scripts/predict_lightgbm.py --input app/data/inference/new_sales.csv
 ```
 
-입력 CSV가 학습 스키마와 같은 판매 데이터이고 `판매수량`이 있으면 `sales` 모드로 동작합니다. 실제 판매수량과 예측 판매수량을 비교해서 MAE, RMSE, MAPE를 출력합니다.
+입력 CSV가 학습 스키마와 같은 판매 데이터이고 `수요`가 있으면 `sales` 모드로 동작합니다. 실제 수요와 예측 수요를 비교해서 MAE, RMSE, MAPE를 출력합니다.
 
 ```text
-날짜,요일,날씨,기온,강수mm,행사,공휴일,신메뉴,품목,구분,판매수량,비고_시나리오
+날짜,요일,날씨,기온,강수mm,행사중여부,공휴일여부,신메뉴여부,품목,구분,수요,판매수량,매진여부,매진시각,비고_시나리오
 ```
 
 POS 마감/재고흐름 CSV처럼 `판매수량` 정답이 없는 파일은 `closing` 모드로 예측만 수행합니다.
@@ -259,7 +262,7 @@ POS 마감/재고흐름 CSV처럼 `판매수량` 정답이 없는 파일은 `clo
 
 `DATA_SOURCE=local`이면 `app/data/` 파일을 로컬 개발과 테스트용 샘플 CSV로 읽고, `DATA_SOURCE=s3`이면 S3의 같은 스키마 CSV를 읽습니다.
 
-- `inventory_flow_5days.csv`: 일자별 재고 흐름, 수요, 실판매, 결품, 폐기, 기말재고
+- `inventory_flow_5y.csv`: 일자별 재고 흐름, 수요, 실판매, 결품, 폐기, 기말재고
 - `item_master.csv`: 품목 ID, 품목명, 단위, 유통기한, ESG 관련 품목 메타데이터
 - `order_policy.csv`: 발주주기, 리드타임, 예측 horizon, 안전재고 방향, MOQ 텍스트
 

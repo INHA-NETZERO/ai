@@ -22,7 +22,11 @@ def main() -> None:
         "--inventory",
         nargs="+",
         default=["app/data/training/sales_*.csv"],
-        help="Sales training CSV path(s) or glob(s). Required columns: 날짜,요일,날씨,기온,강수mm,행사,공휴일,신메뉴,품목,구분,판매수량,비고_시나리오.",
+        help=(
+            "Sales training CSV path(s) or glob(s). Required columns: "
+            "날짜,요일,날씨,기온,강수mm,행사중여부,공휴일여부,신메뉴여부,"
+            "품목,구분,수요,판매수량,매진여부,매진시각,비고_시나리오."
+        ),
     )
     parser.add_argument("--item-master", default=str(ITEM_MASTER_PATH))
     parser.add_argument("--order-policy", default=str(ORDER_POLICY_PATH))

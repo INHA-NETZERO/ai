@@ -15,6 +15,7 @@ from app.services.demand_model import (
     DEFAULT_METADATA_PATH,
     DEFAULT_MODEL_PATH,
     FEATURE_NAMES,
+    TARGET_COLUMN,
     TRAINING_COLUMNS,
     _evaluate_model,
     _training_row_features,
@@ -33,7 +34,7 @@ def main() -> None:
         "--mode",
         choices=["auto", "sales", "closing"],
         default="auto",
-        help="sales: labeled sales CSV with 판매수량, closing: POS closing/inventory CSV, auto: infer from header.",
+        help="sales: labeled sales CSV with 수요 target, closing: POS closing/inventory CSV, auto: infer from header.",
     )
     parser.add_argument("--model", default=str(DEFAULT_MODEL_PATH))
     parser.add_argument("--metadata", default=str(DEFAULT_METADATA_PATH))
@@ -96,13 +97,19 @@ def _evaluate_sales_rows(rows: list[dict[str, str]], model_path: Path, metadata_
 
     metadata = _load_metadata(metadata_path)
     model = lgb.Booster(model_file=str(model_path))
-    features = np.array([_training_row_features(row, metadata) for row in rows], dtype=np.float64)
-    actual = np.array([_to_float(row["판매수량"]) for row in rows], dtype=np.float64)
+    sorted_rows = sorted(rows, key=lambda row: (row["날짜"], row.get("_source_file", ""), row["품목"]))
+    features_list = []
+    previous_by_item: dict[str, dict[str, str]] = {}
+    for row in sorted_rows:
+        features_list.append(_training_row_features(row, metadata, previous_by_item.get(row["품목"])))
+        previous_by_item[row["품목"]] = row
+    features = np.array(features_list, dtype=np.float64)
+    actual = np.array([_to_float(row[TARGET_COLUMN]) for row in sorted_rows], dtype=np.float64)
     predictions = np.maximum(0.0, model.predict(features))
     metrics = _evaluate_model(model, features, actual)
 
     output_rows = []
-    for row, predicted, actual_value in zip(rows, predictions, actual, strict=True):
+    for row, predicted, actual_value in zip(sorted_rows, predictions, actual, strict=True):
         error = float(predicted - actual_value)
         ape = abs(error / actual_value) * 100 if actual_value else 0.0
         output_rows.append(
@@ -110,8 +117,8 @@ def _evaluate_sales_rows(rows: list[dict[str, str]], model_path: Path, metadata_
                 "날짜": row["날짜"],
                 "품목": row["품목"],
                 "구분": row["구분"],
-                "actual_sales": round(float(actual_value), 3),
-                "predicted_sales": round(float(predicted), 3),
+                "actual_demand": round(float(actual_value), 3),
+                "predicted_demand": round(float(predicted), 3),
                 "error": round(error, 3),
                 "abs_error": round(abs(error), 3),
                 "ape": round(ape, 3),

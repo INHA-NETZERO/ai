@@ -32,14 +32,18 @@ SALES_CSV_COLUMNS_V1 = [
     "날씨",
     "기온",
     "강수mm",
-    "행사",
-    "신메뉴",
+    "행사중여부",
+    "공휴일여부",
+    "신메뉴여부",
     "품목",
     "구분",
+    "수요",
     "판매수량",
+    "매진여부",
+    "매진시각",
     "비고_시나리오",
 ]
-SALES_CSV_COLUMNS_WITH_HOLIDAY = [
+LEGACY_SALES_CSV_COLUMNS_WITH_HOLIDAY = [
     "날짜",
     "요일",
     "날씨",
@@ -172,7 +176,7 @@ def _load_sales_history(urls: list[str]) -> list[dict[str, str]]:
 def _parse_sales_csv(content: str) -> list[dict[str, str]]:
     reader = csv.DictReader(io.StringIO(content.lstrip("\ufeff")))
     fieldnames = list(reader.fieldnames or [])
-    if fieldnames not in [SALES_CSV_COLUMNS_V1, SALES_CSV_COLUMNS_WITH_HOLIDAY]:
+    if fieldnames not in [SALES_CSV_COLUMNS_V1, LEGACY_SALES_CSV_COLUMNS_WITH_HOLIDAY]:
         return []
     return list(reader)
 

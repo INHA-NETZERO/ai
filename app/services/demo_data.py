@@ -14,7 +14,7 @@ from app.services.aws_clients import create_aws_client
 
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
-INVENTORY_FLOW_PATH = DATA_DIR / "inventory_flow_5days.csv"
+INVENTORY_FLOW_PATH = DATA_DIR / "inventory_flow_5y.csv"
 ITEM_MASTER_PATH = DATA_DIR / "item_master.csv"
 ORDER_POLICY_PATH = DATA_DIR / "order_policy.csv"
 VALID_ITEM_ID_PATTERN = re.compile(r"^[PRDS]\d{2}$")
@@ -95,7 +95,7 @@ def _build_closing_data(
         row for row in order_policy
         if VALID_ITEM_ID_PATTERN.match(row.get("품목ID", ""))
     ]
-    _validate_columns("inventory_flow_5days.csv", inventory_flow, REQUIRED_INVENTORY_COLUMNS)
+    _validate_columns(INVENTORY_FLOW_PATH.name, inventory_flow, REQUIRED_INVENTORY_COLUMNS)
     _validate_columns("item_master.csv", item_master, REQUIRED_MASTER_COLUMNS)
     _validate_columns("order_policy.csv", order_policy, REQUIRED_POLICY_COLUMNS)
     _validate_item_links(inventory_flow, item_master, order_policy)

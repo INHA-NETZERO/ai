@@ -142,8 +142,8 @@ def test_v1_forecast_returns_single_day_quantiles() -> None:
 
 def test_v1_forecast_downloads_backend_presigned_url(monkeypatch) -> None:
     csv_text = (
-        "날짜,요일,날씨,기온,강수mm,행사,신메뉴,품목,구분,판매수량,비고_시나리오\n"
-        "2026-06-01,월,맑음,22.0,0,N,N,우유,완제품,10,normal\n"
+        "날짜,요일,날씨,기온,강수mm,행사중여부,공휴일여부,신메뉴여부,품목,구분,수요,판매수량,매진여부,매진시각,비고_시나리오\n"
+        "2026-06-01,월,맑음,22.0,0,False,False,False,우유,완제품,10,10,False,,normal\n"
     )
     calls = []
 
@@ -254,7 +254,7 @@ def test_daily_close_returns_llm_output_without_payload() -> None:
     body = response.json()
     assert body["store_id"] == "inha-store-001"
     assert body["llm_output"]
-    assert body["business_date"] == "2025-06-25"
+    assert body["business_date"] == "2025-12-31"
     assert len(body["order_recommendation"]["recommendations"]) == 9
 
 
@@ -273,14 +273,14 @@ def test_chat_is_the_only_semantic_cache_user() -> None:
 def test_csv_demo_data_columns_and_links_are_valid() -> None:
     data = load_demo_closing_data()
 
-    assert len(data["inventory_flow"]) == 45
+    assert len(data["inventory_flow"]) == 16434
     assert len(data["item_master"]) == 28
     assert len(data["order_policy"]) == 28
 
 
 def test_s3_closing_data_loader_uses_configured_keys(monkeypatch) -> None:
     objects = {
-        "daily/closing/inventory_flow_5days.csv": INVENTORY_FLOW_PATH.read_bytes(),
+        "daily/closing/inventory_flow_5y.csv": INVENTORY_FLOW_PATH.read_bytes(),
         "daily/closing/item_master.csv": ITEM_MASTER_PATH.read_bytes(),
         "daily/closing/order_policy.csv": ORDER_POLICY_PATH.read_bytes(),
     }
@@ -296,16 +296,17 @@ def test_s3_closing_data_loader_uses_configured_keys(monkeypatch) -> None:
         data_source="s3",
         s3_bucket="zero-wave-demo",
         s3_prefix="daily/closing",
+        s3_inventory_flow_key="inventory_flow_5y.csv",
         aws_region="ap-northeast-2",
     )
 
     data = load_closing_data(settings)
 
     assert data["store_id"] == "inha-store-001"
-    assert data["data_version"].startswith("s3:zero-wave-demo:daily/closing/inventory_flow_5days.csv")
-    assert len(data["inventory_flow"]) == 45
+    assert data["data_version"].startswith("s3:zero-wave-demo:daily/closing/inventory_flow_5y.csv")
+    assert len(data["inventory_flow"]) == 16434
     assert calls == [
-        ("zero-wave-demo", "daily/closing/inventory_flow_5days.csv"),
+        ("zero-wave-demo", "daily/closing/inventory_flow_5y.csv"),
         ("zero-wave-demo", "daily/closing/item_master.csv"),
         ("zero-wave-demo", "daily/closing/order_policy.csv"),
     ]
