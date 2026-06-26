@@ -5,6 +5,7 @@ from uuid import uuid4
 from app.core.config import Settings
 from app.main import app
 from app.services.aws_clients import create_aws_session
+from app.services.demand_model import DEFAULT_MODEL_PATH, DEFAULT_METADATA_PATH
 from app.services.demo_data import (
     INVENTORY_FLOW_PATH,
     ITEM_MASTER_PATH,
@@ -137,6 +138,41 @@ def test_v1_forecast_returns_single_day_quantiles() -> None:
     assert body["targetDate"] == "2026-06-28"
     prediction = body["predictions"][0]
     assert prediction["itemId"] == 101
+    assert prediction["p10"] <= prediction["p50"] <= prediction["p90"]
+
+
+def test_v1_forecast_uses_lightgbm_when_item_name_is_available() -> None:
+    payload = {
+        "storeId": 1,
+        "targetDate": "2026-01-01",
+        "salesHistory": {
+            "presignedUrls": ["https://example.invalid/sales.csv"],
+            "format": "sales_csv_v1",
+        },
+        "weather": {
+            "forecastDate": "2026-01-01",
+            "avgTemp": 1.2,
+            "precipitationMm": 0.0,
+            "precipitationProb": 10,
+            "skyCode": 1,
+        },
+        "rows": [
+            {
+                "itemId": 101,
+                "itemName": "아메리카노",
+                "itemType": "판매음료",
+                "features": {"dayOfWeek": 3, "isHoliday": False, "ma7": 40.0, "trend": 0.0},
+            }
+        ],
+    }
+    with TestClient(app) as client:
+        response = client.post("/v1/forecast", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    expected_model = "lgbm_global_v1" if DEFAULT_MODEL_PATH.exists() and DEFAULT_METADATA_PATH.exists() else "baseline_v1"
+    assert body["modelVersion"] == expected_model
+    prediction = body["predictions"][0]
     assert prediction["p10"] <= prediction["p50"] <= prediction["p90"]
 
 

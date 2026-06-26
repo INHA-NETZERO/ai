@@ -1,11 +1,14 @@
 import csv
 import hashlib
 import io
+import json
 import time
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
+import numpy as np
 
 from app.api_contracts import (
     DailyQuantilePrediction,
@@ -20,11 +23,19 @@ from app.api_contracts import (
     V1OrderRecommendationResponse,
     WeatherDay,
 )
+from app.services.demand_model import (
+    DEFAULT_METADATA_PATH,
+    DEFAULT_MODEL_PATH,
+    FEATURE_NAMES,
+    _korean_weekday,
+    _training_row_features,
+)
 from app.services.llm import BedrockLlamaClient
 from app.services.semantic_cache import ChatSemanticCache
 
 
-MODEL_VERSION = "baseline_v1"
+MODEL_VERSION = "lgbm_global_v1"
+BASELINE_MODEL_VERSION = "baseline_v1"
 LLM_MODEL_VERSION = "bedrock-llama3.2-1b"
 SALES_CSV_COLUMNS_V1 = [
     "날짜",
@@ -61,6 +72,10 @@ LEGACY_SALES_CSV_COLUMNS_WITH_HOLIDAY = [
 
 def predict_order_quantiles(request: V1OrderRecommendationRequest) -> V1OrderRecommendationResponse:
     history_rows = _load_sales_history(request.sales_history.presigned_urls)
+    model_bundle = _load_lgbm_bundle()
+    if model_bundle is not None and _all_rows_resolvable(request.rows, model_bundle["metadata"]):
+        return _predict_order_with_lgbm(request, history_rows, model_bundle)
+
     start = date.fromisoformat(request.target_date) + timedelta(days=1)
     weather_by_date = {day.forecast_date: day for day in request.weather}
     predictions = []
@@ -81,11 +96,15 @@ def predict_order_quantiles(request: V1OrderRecommendationRequest) -> V1OrderRec
             )
         predictions.append(OrderPrediction(itemId=row.item_id, daily=daily))
 
-    return V1OrderRecommendationResponse(modelVersion=_model_version(history_rows), predictions=predictions)
+    return V1OrderRecommendationResponse(modelVersion=BASELINE_MODEL_VERSION, predictions=predictions)
 
 
 def predict_single_day_quantiles(request: V1ForecastRequest) -> V1ForecastResponse:
     history_rows = _load_sales_history(request.sales_history.presigned_urls)
+    model_bundle = _load_lgbm_bundle()
+    if model_bundle is not None and _all_rows_resolvable(request.rows, model_bundle["metadata"]):
+        return _predict_single_day_with_lgbm(request, history_rows, model_bundle)
+
     predictions = []
     for row in request.rows:
         quantile = _baseline_quantile(row.features.ma7, row.features.trend, 0, request.weather)
@@ -98,7 +117,7 @@ def predict_single_day_quantiles(request: V1ForecastRequest) -> V1ForecastRespon
             )
         )
     return V1ForecastResponse(
-        modelVersion=_model_version(history_rows),
+        modelVersion=BASELINE_MODEL_VERSION,
         targetDate=request.target_date,
         predictions=predictions,
     )
@@ -159,6 +178,186 @@ def _baseline_quantile(ma7: float, trend: float, offset: int, weather: WeatherDa
     )
 
 
+def _predict_order_with_lgbm(
+    request: V1OrderRecommendationRequest,
+    history_rows: list[dict[str, str]],
+    model_bundle: dict[str, Any],
+) -> V1OrderRecommendationResponse:
+    start = date.fromisoformat(request.target_date) + timedelta(days=1)
+    weather_by_date = {day.forecast_date: day for day in request.weather}
+    latest_by_item = _latest_history_by_item(history_rows)
+    predictions = []
+
+    for row in request.rows:
+        item_name = row.item_name or ""
+        current = dict(latest_by_item.get(item_name) or _fallback_lag_row(row, model_bundle["metadata"]))
+        daily = []
+        for offset in range(request.coverage.coverage_days):
+            target_day = start + timedelta(days=offset)
+            weather = weather_by_date.get(target_day.isoformat())
+            p50 = _predict_lgbm_quantity(row, target_day, weather, current, model_bundle)
+            quantile = _quantiles_from_point(p50)
+            daily.append(
+                DailyQuantilePrediction(
+                    date=target_day.isoformat(),
+                    p10=quantile.p10,
+                    p50=quantile.p50,
+                    p90=quantile.p90,
+                )
+            )
+            current = _next_lag_row(row, target_day, p50, weather, model_bundle["metadata"])
+
+        predictions.append(OrderPrediction(itemId=row.item_id, daily=daily))
+
+    return V1OrderRecommendationResponse(modelVersion=MODEL_VERSION, predictions=predictions)
+
+
+def _predict_single_day_with_lgbm(
+    request: V1ForecastRequest,
+    history_rows: list[dict[str, str]],
+    model_bundle: dict[str, Any],
+) -> V1ForecastResponse:
+    target_day = date.fromisoformat(request.target_date)
+    latest_by_item = _latest_history_by_item(history_rows)
+    predictions = []
+
+    for row in request.rows:
+        item_name = row.item_name or ""
+        lag_row = latest_by_item.get(item_name) or _fallback_lag_row(row, model_bundle["metadata"])
+        p50 = _predict_lgbm_quantity(row, target_day, request.weather, lag_row, model_bundle)
+        quantile = _quantiles_from_point(p50)
+        predictions.append(
+            SingleDayPrediction(
+                itemId=row.item_id,
+                p10=quantile.p10,
+                p50=quantile.p50,
+                p90=quantile.p90,
+            )
+        )
+
+    return V1ForecastResponse(
+        modelVersion=MODEL_VERSION,
+        targetDate=request.target_date,
+        predictions=predictions,
+    )
+
+
+def _load_lgbm_bundle(
+    model_path: Path = DEFAULT_MODEL_PATH,
+    metadata_path: Path = DEFAULT_METADATA_PATH,
+) -> dict[str, Any] | None:
+    if not model_path.exists() or not metadata_path.exists():
+        return None
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("feature_names") != FEATURE_NAMES:
+        return None
+
+    import lightgbm as lgb
+
+    return {
+        "model": lgb.Booster(model_file=str(model_path)),
+        "metadata": metadata,
+    }
+
+
+def _all_rows_resolvable(rows: list[Any], metadata: dict[str, Any]) -> bool:
+    item_names = set(metadata.get("item_codes", {}))
+    return all(bool(row.item_name) and row.item_name in item_names for row in rows)
+
+
+def _predict_lgbm_quantity(
+    row: Any,
+    target_day: date,
+    weather: WeatherDay | None,
+    lag_row: dict[str, Any],
+    model_bundle: dict[str, Any],
+) -> float:
+    metadata = model_bundle["metadata"]
+    model = model_bundle["model"]
+    model_row = _model_input_row(row, target_day, weather, metadata)
+    feature = _training_row_features(model_row, metadata, lag_row)
+    prediction = float(model.predict(np.array([feature], dtype=np.float64))[0])
+    return round(max(0.0, prediction), 3)
+
+
+def _model_input_row(row: Any, target_day: date, weather: WeatherDay | None, metadata: dict[str, Any]) -> dict[str, Any]:
+    defaults = metadata.get("defaults", {})
+    return {
+        "날짜": target_day.isoformat(),
+        "요일": _korean_weekday(target_day),
+        "날씨": _weather_label(weather),
+        "기온": weather.avg_temp if weather is not None else defaults.get("기온", 20.0),
+        "강수mm": weather.precipitation_mm if weather is not None else defaults.get("강수mm", 0.0),
+        "행사중여부": "False",
+        "공휴일여부": row.features.is_holiday,
+        "신메뉴여부": "False",
+        "품목": row.item_name,
+        "구분": _item_type(row, metadata),
+        "수요": row.features.ma7,
+        "판매수량": row.features.ma7,
+        "매진여부": "False",
+        "매진시각": "",
+        "비고_시나리오": defaults.get("비고_시나리오", "normal"),
+    }
+
+
+def _fallback_lag_row(row: Any, metadata: dict[str, Any]) -> dict[str, Any]:
+    defaults = metadata.get("defaults", {})
+    return {
+        "날짜": "",
+        "품목": row.item_name,
+        "구분": _item_type(row, metadata),
+        "수요": row.features.ma7,
+        "판매수량": row.features.ma7,
+        "매진여부": "False",
+        "매진시각": defaults.get("매진시각", -1.0),
+    }
+
+
+def _next_lag_row(
+    row: Any,
+    target_day: date,
+    prediction: float,
+    weather: WeatherDay | None,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    next_row = _model_input_row(row, target_day, weather, metadata)
+    next_row["수요"] = prediction
+    next_row["판매수량"] = prediction
+    return next_row
+
+
+def _latest_history_by_item(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+    latest_by_item: dict[str, dict[str, str]] = {}
+    for row in sorted(rows, key=lambda value: value.get("날짜", "")):
+        latest_by_item[row.get("품목", "")] = row
+    return latest_by_item
+
+
+def _item_type(row: Any, metadata: dict[str, Any]) -> str:
+    item_info = metadata.get("item_by_name", {}).get(row.item_name or "", {})
+    return row.item_type or item_info.get("type") or "완제품"
+
+
+def _weather_label(weather: WeatherDay | None) -> str:
+    if weather is None:
+        return "맑음"
+    if weather.precipitation_mm > 0 or weather.precipitation_prob >= 60:
+        return "비"
+    if weather.sky_code >= 3:
+        return "흐림"
+    return "맑음"
+
+
+def _quantiles_from_point(p50: float) -> QuantilePrediction:
+    p50 = round(max(0.0, p50), 3)
+    return QuantilePrediction(
+        p10=round(max(0.0, p50 * 0.8), 3),
+        p50=p50,
+        p90=round(max(p50, p50 * 1.3), 3),
+    )
+
+
 def _load_sales_history(urls: list[str]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for url in urls:
@@ -179,10 +378,6 @@ def _parse_sales_csv(content: str) -> list[dict[str, str]]:
     if fieldnames not in [SALES_CSV_COLUMNS_V1, LEGACY_SALES_CSV_COLUMNS_WITH_HOLIDAY]:
         return []
     return list(reader)
-
-
-def _model_version(history_rows: list[dict[str, str]]) -> str:
-    return MODEL_VERSION
 
 
 def _generate_prompt(request: GenerateRequest) -> str:

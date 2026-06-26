@@ -47,6 +47,8 @@ class PredictionFeatures(BaseModel):
 
 class OrderForecastRow(BaseModel):
     item_id: int = Field(..., alias="itemId")
+    item_name: str | None = Field(default=None, alias="itemName")
+    item_type: str | None = Field(default=None, alias="itemType")
     order_cycle_days: int | None = Field(default=None, alias="orderCycleDays", ge=0)
     lead_time_days: int | None = Field(default=None, alias="leadTimeDays", ge=0)
     features: PredictionFeatures
@@ -54,6 +56,8 @@ class OrderForecastRow(BaseModel):
 
 class ForecastRow(BaseModel):
     item_id: int = Field(..., alias="itemId")
+    item_name: str | None = Field(default=None, alias="itemName")
+    item_type: str | None = Field(default=None, alias="itemType")
     features: PredictionFeatures
 
 

@@ -30,8 +30,11 @@ def build_integration_status(
             "provider": settings.llm_provider,
             "bedrock_model_id": settings.bedrock_model_id,
             "credentials_configured": aws_credentials["configured"],
-            "actual_bedrock_call_ready": settings.llm_provider == "bedrock" and aws_credentials["configured"],
-            "readiness_note": "This is credential configuration readiness. Run scripts/check_bedrock.py to verify real Bedrock permission and model access.",
+            "actual_bedrock_call_ready": False,
+            "readiness_note": (
+                "This endpoint reports local configuration only. "
+                "Run scripts/check_bedrock.py to verify real Bedrock permission and model access."
+            ),
             "fallback_when_unavailable": True,
         },
         "data_source": {

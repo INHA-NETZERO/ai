@@ -2,6 +2,9 @@
 import sys
 from pathlib import Path
 
+import httpx
+from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -29,12 +32,31 @@ def main() -> None:
         )
 
     client = BedrockLlamaClient(settings)
-    answer = client.generate_text(
-        prompt="한국어로 'Bedrock 연결 확인 완료'라고만 답해줘.",
-        system_prompt="You are a terse connectivity checker.",
-        max_tokens=30,
-        temperature=0,
-    )
+    try:
+        answer = client.generate_text(
+            prompt="한국어로 'Bedrock 연결 확인 완료'라고만 답해줘.",
+            system_prompt="You are a terse connectivity checker.",
+            max_tokens=30,
+            temperature=0,
+        )
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        if status_code in {401, 403}:
+            raise SystemExit(
+                f"Bedrock reached AWS, but authorization failed ({status_code}). "
+                "Check API key validity, Bedrock model access, region, and permission for "
+                f"{settings.bedrock_model_id} in {settings.aws_region}."
+            ) from exc
+        raise SystemExit(f"Bedrock HTTP request failed ({status_code}). Check AWS Bedrock status and request settings.") from exc
+    except httpx.HTTPError as exc:
+        raise SystemExit(
+            "Could not reach Bedrock endpoint. Check network/VPN/DNS and AWS region "
+            f"({settings.aws_region})."
+        ) from exc
+    except NoCredentialsError as exc:
+        raise SystemExit("AWS credentials were not found. Put BEDROCK_API_KEY=... in .env or configure AWS credentials.") from exc
+    except (BotoCoreError, ClientError) as exc:
+        raise SystemExit(f"AWS Bedrock SDK call failed: {exc}") from exc
     print(answer)
 
 

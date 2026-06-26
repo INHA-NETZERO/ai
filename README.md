@@ -68,7 +68,7 @@ Spring 백엔드가 S3 presigned URL을 넘겨주는 `/v1/forecast`, `/v1/order-
 .venv/bin/python scripts/check_bedrock.py
 ```
 
-정상 연결이면 짧은 한국어 응답이 출력됩니다. 실패하면 region, model access, IAM 권한을 확인하세요.
+정상 연결이면 짧은 한국어 응답이 출력됩니다. `403 Forbidden`이 나오면 AI 서버 코드는 AWS까지 도달한 상태이고, API key 유효성, Bedrock 모델 액세스, 리전, 해당 모델 호출 권한을 AWS 콘솔에서 확인해야 합니다.
 
 ## ElastiCache 설정
 
@@ -311,7 +311,9 @@ Spring 백엔드가 붙는 API는 아래 세 개입니다. 기존 `/forecast`, `
 | `POST` | `/v1/forecast` | 다음날 단일일 p10/p50/p90 수요예측 |
 | `POST` | `/v1/generate` | 백엔드 grounding 기반 자연어 설명 |
 
-`/v1` API는 상태 없는 서비스로 동작합니다. DB를 직접 읽지 않고, 요청 body와 `salesHistory.presignedUrls`로 받은 CSV만 사용합니다. 현재 모델 입력이 백엔드의 `itemId` 계약과 완전히 맞지 않으면 `baseline_v1`로 안전하게 폴백합니다.
+`/v1` API는 상태 없는 서비스로 동작합니다. DB를 직접 읽지 않고, 요청 body와 `salesHistory.presignedUrls`로 받은 CSV만 사용합니다.
+
+저장된 LightGBM 모델은 학습 데이터의 `품목` 이름 기준으로 학습되어 있습니다. 따라서 백엔드가 `rows[].itemName`을 함께 넘기고, 그 값이 학습 metadata의 품목명과 일치하면 `lgbm_global_v1`로 예측합니다. `itemName`이 없거나 모델 파일이 없거나 품목명이 맞지 않으면 기존 `ma7/trend` 기반 `baseline_v1`로 안전하게 폴백합니다.
 
 #### `POST /v1/order-recommendation`
 
@@ -342,6 +344,8 @@ Spring 백엔드가 붙는 API는 아래 세 개입니다. 기존 `/forecast`, `
   "rows": [
     {
       "itemId": 101,
+      "itemName": "아메리카노",
+      "itemType": "판매음료",
       "orderCycleDays": 7,
       "leadTimeDays": 1,
       "features": {
@@ -359,7 +363,7 @@ Spring 백엔드가 붙는 API는 아래 세 개입니다. 기존 `/forecast`, `
 
 ```json
 {
-  "modelVersion": "baseline_v1",
+  "modelVersion": "lgbm_global_v1",
   "predictions": [
     {
       "itemId": 101,
@@ -377,7 +381,7 @@ Spring 백엔드가 붙는 API는 아래 세 개입니다. 기존 `/forecast`, `
 
 ```json
 {
-  "modelVersion": "baseline_v1",
+  "modelVersion": "lgbm_global_v1",
   "targetDate": "2026-06-28",
   "predictions": [
     { "itemId": 101, "p10": 7.144, "p50": 8.93, "p90": 11.609 }
