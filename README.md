@@ -231,9 +231,120 @@ curl -X POST http://127.0.0.1:8000/chat \
 
 ```json
 {
-  "status": "ok",
-  "llm_provider": "bedrock",
-  "bedrock_model_id": "meta.llama3-2-1b-instruct-v1:0"
+  "status": "UP",
+  "model": {
+    "forecast": "baseline_v1",
+    "llm": "fallback_v1"
+  },
+  "actual_bedrock_call_ready": false
+}
+```
+
+### Spring 백엔드 연동용 `/v1` 계약
+
+Spring 백엔드가 붙는 API는 아래 세 개입니다. 기존 `/forecast`, `/order-recommendation`, `/daily-close`, `/chat`은 로컬 데모용으로 남겨둔 엔드포인트입니다.
+
+| Method | Path | 역할 |
+| --- | --- | --- |
+| `POST` | `/v1/order-recommendation` | 발주 커버기간 일별 p10/p50/p90 수요예측 |
+| `POST` | `/v1/forecast` | 다음날 단일일 p10/p50/p90 수요예측 |
+| `POST` | `/v1/generate` | 백엔드 grounding 기반 자연어 설명 |
+
+`/v1` API는 상태 없는 서비스로 동작합니다. DB를 직접 읽지 않고, 요청 body와 `salesHistory.presignedUrls`로 받은 CSV만 사용합니다. 현재 모델 입력이 백엔드의 `itemId` 계약과 완전히 맞지 않으면 `baseline_v1`로 안전하게 폴백합니다.
+
+#### `POST /v1/order-recommendation`
+
+요청 예시:
+
+```json
+{
+  "storeId": 1,
+  "targetDate": "2026-06-27",
+  "salesHistory": {
+    "presignedUrls": ["https://example.com/sales.csv?..."],
+    "format": "sales_csv_v1"
+  },
+  "coverage": {
+    "leadTimeDays": 1,
+    "orderCycleDays": 7,
+    "coverageDays": 8
+  },
+  "weather": [
+    {
+      "forecastDate": "2026-06-28",
+      "avgTemp": 21.2,
+      "precipitationMm": 12.0,
+      "precipitationProb": 80,
+      "skyCode": 4
+    }
+  ],
+  "rows": [
+    {
+      "itemId": 101,
+      "orderCycleDays": 7,
+      "leadTimeDays": 1,
+      "features": {
+        "dayOfWeek": 6,
+        "isHoliday": false,
+        "ma7": 9.4,
+        "trend": -0.3
+      }
+    }
+  ]
+}
+```
+
+응답 예시:
+
+```json
+{
+  "modelVersion": "baseline_v1",
+  "predictions": [
+    {
+      "itemId": 101,
+      "daily": [
+        { "date": "2026-06-28", "p10": 7.144, "p50": 8.93, "p90": 11.609 }
+      ]
+    }
+  ]
+}
+```
+
+#### `POST /v1/forecast`
+
+다음날 단일일 수요 분위만 반환합니다.
+
+```json
+{
+  "modelVersion": "baseline_v1",
+  "targetDate": "2026-06-28",
+  "predictions": [
+    { "itemId": 101, "p10": 7.144, "p50": 8.93, "p90": 11.609 }
+  ]
+}
+```
+
+#### `POST /v1/generate`
+
+백엔드가 만든 grounding 숫자를 문장으로 바꿉니다. `cacheHit`, `latencyMs`, `tokens`는 항상 포함됩니다. AWS Bedrock 인증이 없으면 fallback 문장을 반환합니다.
+
+```json
+{
+  "answer": "우유는 66L 발주를 권장합니다. 제공된 수요 중앙값은 80L입니다.",
+  "cacheHit": false,
+  "latencyMs": 12,
+  "tokens": 142
+}
+```
+
+요청 검증 실패는 명세대로 아래 형태의 `400` 응답을 반환합니다.
+
+```json
+{
+  "error": {
+    "code": "BAD_REQUEST",
+    "message": "coverageDays mismatch (leadTimeDays + orderCycleDays)"
+  }
 }
 ```
 
